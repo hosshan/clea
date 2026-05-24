@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCsvStore } from "../../store/csvStore";
 import { cn } from "../../lib/utils";
@@ -137,7 +137,7 @@ export function CsvTable() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (editingCell && data) {
       const cellValue = data.rows[editingCell.row]?.[editingCell.column] || "";
       setEditValue(cellValue);
