@@ -32,5 +32,20 @@
     ],
     "deny": [],
     "ask": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/rust-warning-check.sh\"",
+            "timeout": 120,
+            "statusMessage": "cargo build (warning check)"
+          }
+        ]
+      }
+    ]
   }
 }
