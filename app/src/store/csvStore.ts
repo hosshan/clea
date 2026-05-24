@@ -22,6 +22,9 @@ interface CsvState {
   columnWidths: Record<number, number>;
   defaultColumnWidth: number;
 
+  // Display mode
+  wrapText: boolean;
+
   // Editing state
   editingCell: CsvCell | null;
   hasUnsavedChanges: boolean;
@@ -136,6 +139,10 @@ interface CsvState {
   getColumnWidth: (columnIndex: number) => number;
   resetColumnWidths: () => void;
 
+  // Display mode actions
+  setWrapText: (wrap: boolean) => void;
+  toggleWrapText: () => void;
+
   // Search operations
   setSearchQuery: (query: string, options?: Partial<CsvState['searchOptions']>) => void;
   performSearch: () => void;
@@ -178,6 +185,8 @@ export const useCsvStore = create<CsvState>()(
 
       columnWidths: {},
       defaultColumnWidth: 150,
+
+      wrapText: false,
 
       editingCell: null,
       hasUnsavedChanges: false,
@@ -1141,6 +1150,9 @@ export const useCsvStore = create<CsvState>()(
         set({ columnWidths: {} });
       },
 
+      setWrapText: (wrap) => set({ wrapText: wrap }),
+      toggleWrapText: () => set((state) => ({ wrapText: !state.wrapText })),
+
       // Search operations
       setSearchQuery: (query, options) => {
         set((state) => ({
@@ -1428,6 +1440,7 @@ export const useCsvStore = create<CsvState>()(
         },
         columnWidths: {},
         defaultColumnWidth: 150,
+        wrapText: false,
         currentSort: { columns: [] },
         aiMessages: [],
         aiPendingChanges: null,

@@ -11,7 +11,8 @@ import {
   CheckSquare,
   BarChart3,
   FileDown,
-  FilePlus
+  FilePlus,
+  WrapText
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useCsvStore } from '../../store/csvStore';
@@ -46,7 +47,9 @@ export function Toolbar({ onSave, onSaveAs, onOpenSearch, onNewCsv }: ToolbarPro
     replaceAll,
     currentSort,
     applySorting,
-    clearSorting
+    clearSorting,
+    wrapText,
+    toggleWrapText
   } = useCsvStore();
   const tauri = useTauri();
 
@@ -238,6 +241,19 @@ export function Toolbar({ onSave, onSaveAs, onOpenSearch, onNewCsv }: ToolbarPro
 
       {/* Settings */}
       <div className="flex items-center space-x-2">
+        <Button
+          variant={wrapText ? "default" : "ghost"}
+          size="sm"
+          disabled={!data}
+          onClick={toggleWrapText}
+          className="flex items-center space-x-1"
+          title={wrapText ? "折り返し表示: ON" : "折り返し表示: OFF"}
+          aria-pressed={wrapText}
+        >
+          <WrapText className="h-4 w-4" />
+          <span>Wrap</span>
+        </Button>
+
         <Button
           variant="ghost"
           size="sm"

@@ -56,6 +56,7 @@ export function CsvTable() {
     searchResults,
     currentSearchIndex,
     setScrollToCell,
+    wrapText,
   } = useCsvStore();
 
   const [editValue, setEditValue] = useState("");
@@ -86,7 +87,7 @@ export function CsvTable() {
   const rowVirtualizer = useVirtualizer({
     count: displayData?.rows.length || 0,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 35,
+    estimateSize: () => (wrapText ? 80 : 35),
     overscan: 15, // Increased overscan for smoother scrolling
     measureElement:
       typeof window !== "undefined" &&
@@ -94,6 +95,14 @@ export function CsvTable() {
         ? (element) => element?.getBoundingClientRect().height
         : undefined,
   });
+
+  // Recalculate row heights when wrap mode toggles
+  React.useEffect(() => {
+    if (rowVirtualizer) {
+      rowVirtualizer.measure();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrapText]);
 
   // Virtual scrolling for columns with performance optimizations
   const columnVirtualizer = useVirtualizer({
@@ -1132,7 +1141,8 @@ export function CsvTable() {
                       data-row-index={virtualRow.index}
                       data-column-index={virtualColumn.index}
                       className={cn(
-                        "border-r border-b border-border bg-background flex items-center px-2 text-sm cursor-cell transition-colors hover:bg-accent outline-none",
+                        "border-r border-b border-border bg-background flex px-2 text-sm cursor-cell transition-colors hover:bg-accent outline-none overflow-hidden",
+                        wrapText ? "items-start py-1" : "items-center",
                         {
                           "bg-primary/10 border-primary border-2 z-10":
                             isSelected && !isEditing && !isCurrentSearchResult,
@@ -1202,7 +1212,12 @@ export function CsvTable() {
                         />
                       ) : (
                         <span
-                          className="truncate w-full block"
+                          className={cn(
+                            "w-full block",
+                            wrapText
+                              ? "whitespace-pre-wrap break-words"
+                              : "truncate"
+                          )}
                           title={cellValue.length > 20 ? cellValue : undefined}
                         >
                           {cellValue}
