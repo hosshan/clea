@@ -60,6 +60,7 @@ impl AiAssistant {
         None
     }
 
+    #[allow(dead_code)]
     pub fn config(&self) -> &AiConfig {
         &self.config
     }

@@ -41,6 +41,7 @@ pub enum MessageType {
     Progress,
 }
 
+#[allow(dead_code)]
 impl ChatMessage {
     pub fn new(role: MessageRole, content: String) -> Self {
         Self {

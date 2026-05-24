@@ -4,6 +4,7 @@ use crate::metadata::MetadataManager;
 use crate::ai_script::executor::ScriptExecutor;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct CsvData {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
@@ -12,7 +13,9 @@ pub struct CsvData {
 pub struct AppStateInner {
     pub current_file: Option<PathBuf>,
     pub metadata_manager: MetadataManager,
+    #[allow(dead_code)]
     pub csv_data: Option<CsvData>,
+    #[allow(dead_code)]
     pub has_unsaved_changes: bool,
 }
 

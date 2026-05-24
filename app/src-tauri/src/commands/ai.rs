@@ -247,13 +247,6 @@ fn generate_intent_description(intent: &crate::ai::Intent) -> String {
 // New AI Chat Commands (Script Generation & Execution)
 // ============================================================================
 
-/// Request to generate a script from user prompt
-#[derive(Debug, Deserialize)]
-pub struct GenerateScriptRequest {
-    pub prompt: String,
-    pub csv_context: ExecutionContext,
-}
-
 /// Response with generated script
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -421,14 +414,6 @@ pub async fn fix_script(
     }
 }
 
-/// Request to execute a script
-#[derive(Debug, Deserialize)]
-pub struct ExecuteScriptRequest {
-    pub script: Script,
-    pub approval: bool,
-    pub csv_data: CsvDataInput,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct CsvDataInput {
     pub headers: Vec<String>,
@@ -536,12 +521,6 @@ pub async fn execute_script(
     }
 }
 
-/// Request to get script execution progress
-#[derive(Debug, Deserialize)]
-pub struct GetScriptProgressRequest {
-    pub execution_id: String,
-}
-
 /// Response with progress information
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -572,12 +551,6 @@ pub async fn get_script_progress(
     }
 }
 
-/// Request to cancel script execution
-#[derive(Debug, Deserialize)]
-pub struct CancelScriptExecutionRequest {
-    pub execution_id: String,
-}
-
 /// Response with cancellation result
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -604,13 +577,6 @@ pub async fn cancel_script_execution(
             message: format!("Failed to cancel execution: {}", e),
         }),
     }
-}
-
-/// Request to save chat history
-#[derive(Debug, Deserialize)]
-pub struct SaveChatHistoryRequest {
-    pub csv_path: String,
-    pub history: ChatHistory,
 }
 
 /// Response with save result
@@ -642,12 +608,6 @@ pub async fn save_chat_history(
             message: format!("Failed to save chat history: {}", e),
         }),
     }
-}
-
-/// Request to load chat history
-#[derive(Debug, Deserialize)]
-pub struct LoadChatHistoryRequest {
-    pub csv_path: String,
 }
 
 /// Response with chat history

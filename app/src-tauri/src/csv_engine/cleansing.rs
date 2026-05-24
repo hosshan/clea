@@ -91,7 +91,7 @@ impl DataCleanser {
     fn remove_duplicates(data: &mut Vec<Vec<String>>) -> CleansingResult {
         let mut seen = std::collections::HashSet::new();
         let original_len = data.len();
-        let mut modifications = Vec::new();
+        let modifications = Vec::new();
 
         data.retain(|row| {
             let key = row.join("|");

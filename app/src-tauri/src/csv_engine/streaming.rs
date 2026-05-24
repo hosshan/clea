@@ -5,6 +5,7 @@ use csv;
 use encoding_rs::{Encoding, UTF_8};
 use anyhow::{Result, Context};
 
+#[allow(dead_code)]
 pub struct StreamingReader {
     path: std::path::PathBuf,
     delimiter: u8,
@@ -13,6 +14,7 @@ pub struct StreamingReader {
     chunk_size: usize,
 }
 
+#[allow(dead_code)]
 impl StreamingReader {
     pub fn new(path: &Path) -> Self {
         Self {

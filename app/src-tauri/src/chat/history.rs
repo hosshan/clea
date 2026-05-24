@@ -16,6 +16,7 @@ pub struct ChatHistory {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 impl ChatHistory {
     pub fn new(csv_path: String) -> Self {
         let now = Utc::now();

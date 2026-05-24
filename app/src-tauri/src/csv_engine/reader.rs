@@ -30,16 +30,19 @@ impl CsvReader {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_headers(mut self, has_headers: bool) -> Self {
         self.has_headers = has_headers;
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_encoding(mut self, encoding: &'static Encoding) -> Self {
         self.encoding = encoding;
         self

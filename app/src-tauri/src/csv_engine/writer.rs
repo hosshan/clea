@@ -64,6 +64,7 @@ impl CsvWriter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn append_rows(&self, path: &Path, rows: &[Vec<String>]) -> Result<()> {
         let file = std::fs::OpenOptions::new()
             .write(true)

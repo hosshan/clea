@@ -4,6 +4,5 @@
 pub mod message;
 pub mod history;
 
-pub use message::{ChatMessage, MessageRole, MessageMetadata, MessageType};
 pub use history::ChatHistory;
 

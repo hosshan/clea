@@ -70,6 +70,7 @@ impl SecurityValidator {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn is_dangerous_operation(&self, script: &str) -> bool {
         self.dangerous_patterns.iter().any(|pattern| pattern.is_match(script))
     }

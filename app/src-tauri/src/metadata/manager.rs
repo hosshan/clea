@@ -113,7 +113,7 @@ impl MetadataManager {
 
         if meta_path.exists() {
             let content = fs::read_to_string(&meta_path)?;
-            let mut metadata: CsvMetadata = serde_json::from_str(&content)?;
+            let metadata: CsvMetadata = serde_json::from_str(&content)?;
             
             // Migration: Ensure chat_history field exists (backward compatibility)
             // #[serde(default)] handles this automatically, but we can add explicit migration here if needed
@@ -145,6 +145,7 @@ impl MetadataManager {
         meta_path
     }
 
+    #[allow(dead_code)]
     pub fn get_cached(&self) -> Option<&CsvMetadata> {
         self.metadata_cache.as_ref()
     }
@@ -173,6 +174,7 @@ impl MetadataManager {
     }
 
     /// Add a message to chat history
+    #[allow(dead_code)]
     pub fn add_chat_message(&mut self, csv_path: &Path, message: crate::chat::message::ChatMessage) -> Result<()> {
         let mut metadata = self.load_metadata(csv_path)?;
         
