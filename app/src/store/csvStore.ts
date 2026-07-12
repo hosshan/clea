@@ -734,14 +734,40 @@ export const useCsvStore = create<CsvState>()(
           rows: state.data.rows.map(row => [...row])
         };
 
-        // Create deep copy of rows for modification
-        const newRows = state.data.rows.map(row => [...row]);
-        const target = targetCell || state.selectedCell;
+        // 貼り付け先: 明示指定 → 選択セル → 範囲選択の左上
+        const target =
+          targetCell ||
+          state.selectedCell ||
+          (state.selectedRange
+            ? {
+                row: state.selectedRange.startRow,
+                column: state.selectedRange.startColumn,
+                value: '',
+              }
+            : null);
 
         if (!target) return;
 
         const startRow = target.row;
         const startCol = target.column;
+
+        // 貼り付けに必要な列数を算出し、不足していれば列を自動拡張（Excel挙動）
+        let maxColNeeded = state.data.headers.length;
+        for (const clipRow of state.clipboard) {
+          maxColNeeded = Math.max(maxColNeeded, startCol + clipRow.length);
+        }
+        const newHeaders = [...state.data.headers];
+        while (newHeaders.length < maxColNeeded) {
+          newHeaders.push(`Column ${newHeaders.length + 1}`);
+        }
+        const colCount = newHeaders.length;
+
+        // 既存行を新しい列数に合わせて拡張しつつディープコピー
+        const newRows = state.data.rows.map(row => {
+          const r = [...row];
+          while (r.length < colCount) r.push('');
+          return r;
+        });
 
         // Paste clipboard data starting from target cell
         for (let clipRow = 0; clipRow < state.clipboard.length; clipRow++) {
@@ -749,23 +775,21 @@ export const useCsvStore = create<CsvState>()(
 
           // Extend rows if necessary
           while (targetRowIndex >= newRows.length) {
-            newRows.push(new Array(state.data.headers.length).fill(''));
+            newRows.push(new Array(colCount).fill(''));
+          }
+          while (newRows[targetRowIndex].length < colCount) {
+            newRows[targetRowIndex].push('');
           }
 
           for (let clipCol = 0; clipCol < state.clipboard[clipRow].length; clipCol++) {
             const targetColIndex = startCol + clipCol;
-
-            // Only paste if within bounds
-            if (targetColIndex < state.data.headers.length) {
-              if (!newRows[targetRowIndex]) {
-                newRows[targetRowIndex] = new Array(state.data.headers.length).fill('');
-              }
+            if (targetColIndex < colCount) {
               newRows[targetRowIndex][targetColIndex] = state.clipboard[clipRow][clipCol];
             }
           }
         }
 
-        const afterData = { ...state.data, rows: newRows };
+        const afterData = { ...state.data, headers: newHeaders, rows: newRows };
 
         // Add to history
         const historyAction: HistoryAction = {

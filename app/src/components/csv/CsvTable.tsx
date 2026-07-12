@@ -4,6 +4,7 @@ import { useCsvStore } from "../../store/csvStore";
 import { cn } from "../../lib/utils";
 import { ColumnMenu } from "../ColumnMenu";
 import { RowMenu } from "../RowMenu";
+import { CellContextMenu, type CellMenuState } from "../CellContextMenu";
 import { ColumnResizeHandle } from "./ColumnResizeHandle";
 import { DragHandle } from "./DragHandle";
 import { DropZoneIndicator } from "./DropZoneIndicator";
@@ -40,13 +41,16 @@ export function CsvTable() {
     addRow,
     insertRows,
     deleteRow,
+    deleteRows,
     deleteSelectedRows,
     duplicateRow,
     addColumn,
     insertColumns,
     deleteColumn,
+    deleteColumns,
     deleteSelectedColumns,
     renameColumn,
+    clipboard,
     setColumnWidth,
     getColumnWidth,
     columnWidths,
@@ -69,6 +73,11 @@ export function CsvTable() {
   );
   const [headerEditValue, setHeaderEditValue] = useState("");
   const headerInputRef = useRef<HTMLInputElement>(null);
+
+  // データセルの右クリックメニュー状態
+  const [cellMenu, setCellMenu] = useState<CellMenuState | null>(null);
+  // type-to-edit: 印字文字で編集開始する際の初期値をレイアウト効果に伝えるためのref
+  const pendingInitialEdit = useRef<string | null>(null);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -152,8 +161,15 @@ export function CsvTable() {
 
   useLayoutEffect(() => {
     if (editingCell && data) {
-      const cellValue = data.rows[editingCell.row]?.[editingCell.column] || "";
-      setEditValue(cellValue);
+      // type-to-edit で編集開始した場合は、タイプした文字を初期値にする（既存内容を置換）
+      if (pendingInitialEdit.current !== null) {
+        setEditValue(pendingInitialEdit.current);
+        pendingInitialEdit.current = null;
+      } else {
+        const cellValue =
+          data.rows[editingCell.row]?.[editingCell.column] || "";
+        setEditValue(cellValue);
+      }
     }
   }, [editingCell, data]);
 
@@ -406,11 +422,71 @@ export function CsvTable() {
     return { inSelection, count };
   };
 
+  // PageUp/PageDown の1ページ分の行数を可視領域から概算
+  const getPageSize = () => {
+    const viewportHeight = parentRef.current?.clientHeight ?? 700;
+    const rowHeight = wrapText ? 80 : 35;
+    return Math.max(1, Math.floor(viewportHeight / rowHeight) - 1);
+  };
+
   const handleCellDoubleClick = (row: number, column: number) => {
     if (!data) return;
 
     const cell = { row, column, value: data.rows[row]?.[column] || "" };
     startEditing(cell);
+  };
+
+  // 指定セルが現在の選択に含まれるか
+  const isCellInSelection = (row: number, column: number) => {
+    if (selectedCell) {
+      return selectedCell.row === row && selectedCell.column === column;
+    }
+    if (selectedRange) {
+      return (
+        row >= selectedRange.startRow &&
+        row <= selectedRange.endRow &&
+        column >= selectedRange.startColumn &&
+        column <= selectedRange.endColumn
+      );
+    }
+    return false;
+  };
+
+  const handleCellContextMenu = (
+    row: number,
+    column: number,
+    event: React.MouseEvent
+  ) => {
+    if (!data) return;
+    event.preventDefault();
+    // 右クリックしたセルが選択外なら、そのセルを単独選択（Excel挙動）
+    if (!isCellInSelection(row, column)) {
+      selectCell({ row, column, value: data.rows[row]?.[column] || "" });
+    }
+    setCellMenu({ x: event.clientX, y: event.clientY, row, column });
+  };
+
+  // セルメニューの挿入/削除対象（選択範囲内なら範囲全体、そうでなければ単一セルの行/列）
+  const computeMenuTargets = () => {
+    if (!cellMenu) return { rows: [] as number[], columns: [] as number[] };
+    const within =
+      !!selectedRange &&
+      cellMenu.row >= selectedRange.startRow &&
+      cellMenu.row <= selectedRange.endRow &&
+      cellMenu.column >= selectedRange.startColumn &&
+      cellMenu.column <= selectedRange.endColumn;
+    const rows: number[] = [];
+    const columns: number[] = [];
+    if (within && selectedRange) {
+      for (let r = selectedRange.startRow; r <= selectedRange.endRow; r++)
+        rows.push(r);
+      for (let c = selectedRange.startColumn; c <= selectedRange.endColumn; c++)
+        columns.push(c);
+    } else {
+      rows.push(cellMenu.row);
+      columns.push(cellMenu.column);
+    }
+    return { rows, columns };
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -530,6 +606,28 @@ export function CsvTable() {
 
     let newRow = row;
     let newColumn = column;
+
+    // Type-to-edit: 印字可能文字で編集を開始し、その文字で内容を置き換える（Excel/Sheets挙動）
+    if (e.key.length === 1 && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      let editRow = row;
+      let editColumn = column;
+      // 行/列選択時はアクティブセルを先頭側に寄せる
+      if (selectedRange?.type === "row") {
+        editColumn = selectedRange.startColumn;
+      } else if (selectedRange?.type === "column") {
+        editRow = selectedRange.startRow;
+      }
+      const cell = {
+        row: editRow,
+        column: editColumn,
+        value: data.rows[editRow]?.[editColumn] || "",
+      };
+      e.preventDefault();
+      pendingInitialEdit.current = e.key;
+      selectCell(cell);
+      startEditing(cell);
+      return;
+    }
 
     // Handle shift+arrow keys for range selection
     if (e.shiftKey) {
@@ -672,6 +770,18 @@ export function CsvTable() {
           e.preventDefault();
           newColumn = data.headers.length - 1; // Jump to last column
           break;
+        case "Home":
+          // Cmd/Ctrl + Home: 先頭セル(A1)へ
+          e.preventDefault();
+          newRow = 0;
+          newColumn = 0;
+          break;
+        case "End":
+          // Cmd/Ctrl + End: 最終セルへ
+          e.preventDefault();
+          newRow = data.rows.length - 1;
+          newColumn = data.headers.length - 1;
+          break;
         default:
           // Let other Cmd/Ctrl combinations pass through
           break;
@@ -694,6 +804,24 @@ export function CsvTable() {
         case "ArrowRight":
           e.preventDefault();
           newColumn = Math.min(data.headers.length - 1, column + 1);
+          break;
+        case "Home":
+          // 行頭（先頭列）へ
+          e.preventDefault();
+          newColumn = 0;
+          break;
+        case "End":
+          // 行末（最終列）へ
+          e.preventDefault();
+          newColumn = data.headers.length - 1;
+          break;
+        case "PageUp":
+          e.preventDefault();
+          newRow = Math.max(0, row - getPageSize());
+          break;
+        case "PageDown":
+          e.preventDefault();
+          newRow = Math.min(data.rows.length - 1, row + getPageSize());
           break;
         case "Enter":
         case "F2":
@@ -996,8 +1124,13 @@ export function CsvTable() {
                           deleteColumn(virtualColumn.index);
                         }
                       }}
-                      onRenameColumn={(newName) => {
-                        renameColumn(virtualColumn.index, newName);
+                      onStartRename={() => {
+                        // モーダルを使わずヘッダのインライン編集を開始（確認レス）
+                        const currentName =
+                          displayData?.headers[virtualColumn.index] ||
+                          `Column ${virtualColumn.index + 1}`;
+                        setHeaderEditValue(currentName);
+                        setEditingHeaderColumn(virtualColumn.index);
                       }}
                     />
                     <ColumnResizeHandle
@@ -1280,6 +1413,13 @@ export function CsvTable() {
                           virtualColumn.index
                         )
                       }
+                      onContextMenu={(e) =>
+                        handleCellContextMenu(
+                          virtualRow.index,
+                          virtualColumn.index,
+                          e
+                        )
+                      }
                       tabIndex={-1}
                     >
                       {isEditing ? (
@@ -1322,6 +1462,49 @@ export function CsvTable() {
           </div>
         )}
       </div>
+
+      {/* データセルの右クリックメニュー（確認ダイアログなし・全操作 Undo 可能） */}
+      {cellMenu &&
+        (() => {
+          const { rows, columns } = computeMenuTargets();
+          const rowDeleteLabel =
+            rows.length > 1 ? `${rows.length}行を削除` : "行を削除";
+          const columnDeleteLabel =
+            columns.length > 1 ? `${columns.length}列を削除` : "列を削除";
+          const menuRow = cellMenu.row;
+          const menuColumn = cellMenu.column;
+          return (
+            <CellContextMenu
+              state={cellMenu}
+              onClose={() => setCellMenu(null)}
+              canPaste={!!clipboard}
+              rowDeleteLabel={rowDeleteLabel}
+              columnDeleteLabel={columnDeleteLabel}
+              onCut={cutSelection}
+              onCopy={() => {
+                copySelection().catch((error) => {
+                  console.error("Failed to copy selection:", error);
+                });
+              }}
+              onPaste={() => paste()}
+              onClearContents={deleteSelection}
+              onInsertRowAbove={() =>
+                insertRows("above", menuRow, rows.length)
+              }
+              onInsertRowBelow={() =>
+                insertRows("below", menuRow, rows.length)
+              }
+              onDeleteRow={() => deleteRows(rows)}
+              onInsertColumnBefore={() =>
+                insertColumns("before", menuColumn, columns.length)
+              }
+              onInsertColumnAfter={() =>
+                insertColumns("after", menuColumn, columns.length)
+              }
+              onDeleteColumn={() => deleteColumns(columns)}
+            />
+          );
+        })()}
     </div>
   );
 }
