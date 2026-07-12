@@ -3,6 +3,30 @@ import { devtools } from 'zustand/middleware';
 import type { CsvData, CsvCell, CsvSelection, ViewportRange, FilterConfig, SortConfig, HistoryAction, SortState } from '../types/csv';
 import { applyFilter } from '../utils/filtering';
 
+/** 履歴アクションから人間可読なラベルを生成する（履歴パネル表示用） */
+export function describeHistoryAction(action: HistoryAction): string {
+  switch (action.type) {
+    case 'cell_update':     return 'セルを編集';
+    case 'range_update':    return '範囲を編集';
+    case 'delete':          return '内容を削除';
+    case 'cut':             return '切り取り';
+    case 'paste':           return '貼り付け';
+    case 'add_row':         return '行を挿入';
+    case 'delete_row':      return '行を削除';
+    case 'delete_rows':     return action.data.description ?? '複数行を削除';
+    case 'insert_rows':     return action.data.description ?? '複数行を挿入';
+    case 'duplicate_row':   return '行を複製';
+    case 'add_column':      return '列を追加';
+    case 'delete_column':   return '列を削除';
+    case 'delete_columns':  return action.data.description ?? '複数列を削除';
+    case 'insert_columns':  return action.data.description ?? '複数列を挿入';
+    case 'rename_column':   return '列名を変更';
+    case 'replace_all':     return action.data.description ?? '一括置換';
+    case 'replace_current': return '置換';
+    default:                return action.data.description ?? '操作';
+  }
+}
+
 interface CsvState {
   // Data state
   data: CsvData | null;
@@ -78,8 +102,8 @@ interface CsvState {
 
   selectCell: (cell: CsvCell | null) => void;
   selectRange: (range: CsvSelection | null) => void;
-  selectRow: (rowIndex: number) => void;
-  selectColumn: (columnIndex: number) => void;
+  selectRow: (rowIndex: number, opts?: { extend?: boolean }) => void;
+  selectColumn: (columnIndex: number, opts?: { extend?: boolean }) => void;
   selectAll: () => void;
   extendSelection: (cell: CsvCell) => void;
 
@@ -120,15 +144,22 @@ interface CsvState {
   addToHistory: (action: HistoryAction) => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  jumpToHistory: (targetIndex: number) => void;
 
   // Row operations with history
   addRow: (position: 'above' | 'below', rowIndex?: number) => void;
+  insertRows: (position: 'above' | 'below', rowIndex: number, count: number) => void;
   deleteRow: (rowIndex: number) => void;
+  deleteRows: (rowIndices: number[]) => void;
+  deleteSelectedRows: () => void;
   duplicateRow: (rowIndex: number) => void;
 
   // Column operations with history
   addColumn: (position: 'before' | 'after', columnIndex: number) => void;
+  insertColumns: (position: 'before' | 'after', columnIndex: number, count: number) => void;
   deleteColumn: (columnIndex: number) => void;
+  deleteColumns: (columnIndices: number[]) => void;
+  deleteSelectedColumns: () => void;
   renameColumn: (columnIndex: number, newName: string) => void;
 
   // Batch operations with history
@@ -221,7 +252,14 @@ export const useCsvStore = create<CsvState>()(
         set({
           data,
           error: null,
-          currentFilePath: newFilePath
+          currentFilePath: newFilePath,
+          // 新しいデータ読み込み時は前ファイルの履歴・選択を引き継がない
+          // （履歴パネルに前ファイルの操作が残らないようにする）
+          history: [],
+          historyIndex: -1,
+          selectedCell: null,
+          selectedRange: null,
+          editingCell: null,
         });
 
         // Load sort state and view state from metadata if file path is available
@@ -254,17 +292,24 @@ export const useCsvStore = create<CsvState>()(
       selectCell: (selectedCell) => set({ selectedCell, selectedRange: null }),
       selectRange: (selectedRange) => set({ selectedRange, selectedCell: null }),
 
-      selectRow: (rowIndex) => {
+      selectRow: (rowIndex, opts) => {
         const state = get();
         if (!state.data) return;
 
+        // Shift+クリック: 直近の行選択のアンカーから連続範囲を選択
+        const prev = state.selectedRange;
+        const anchor =
+          opts?.extend && prev?.type === 'row'
+            ? prev.anchorRow ?? prev.startRow
+            : rowIndex;
+
         const selection: CsvSelection = {
-          startRow: rowIndex,
+          startRow: Math.min(anchor, rowIndex),
           startColumn: 0,
-          endRow: rowIndex,
+          endRow: Math.max(anchor, rowIndex),
           endColumn: state.data.headers.length - 1,
           type: 'row',
-          anchorRow: rowIndex,
+          anchorRow: anchor,
           anchorColumn: 0,
           focusRow: rowIndex,
           focusColumn: state.data.headers.length - 1
@@ -273,18 +318,25 @@ export const useCsvStore = create<CsvState>()(
         set({ selectedRange: selection, selectedCell: null });
       },
 
-      selectColumn: (columnIndex) => {
+      selectColumn: (columnIndex, opts) => {
         const state = get();
         if (!state.data) return;
 
+        // Shift+クリック: 直近の列選択のアンカーから連続範囲を選択
+        const prev = state.selectedRange;
+        const anchor =
+          opts?.extend && prev?.type === 'column'
+            ? prev.anchorColumn ?? prev.startColumn
+            : columnIndex;
+
         const selection: CsvSelection = {
           startRow: 0,
-          startColumn: columnIndex,
+          startColumn: Math.min(anchor, columnIndex),
           endRow: state.data.rows.length - 1,
-          endColumn: columnIndex,
+          endColumn: Math.max(anchor, columnIndex),
           type: 'column',
           anchorRow: 0,
-          anchorColumn: columnIndex,
+          anchorColumn: anchor,
           focusRow: state.data.rows.length - 1,
           focusColumn: columnIndex
         };
@@ -791,19 +843,19 @@ export const useCsvStore = create<CsvState>()(
       // History operations
       addToHistory: (action) => {
         const state = get();
+        // ラベルが無ければ自動付与（履歴パネル表示用）
+        const labeledAction: HistoryAction = {
+          ...action,
+          label: action.label ?? describeHistoryAction(action),
+        };
+
         const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push(action);
+        newHistory.push(labeledAction);
 
         // Limit history size to prevent memory issues
         const MAX_HISTORY_SIZE = 100;
         if (newHistory.length > MAX_HISTORY_SIZE) {
           newHistory.shift();
-        } else {
-          set({
-            history: newHistory,
-            historyIndex: newHistory.length - 1
-          });
-          return;
         }
 
         set({
@@ -848,6 +900,33 @@ export const useCsvStore = create<CsvState>()(
       canRedo: () => {
         const state = get();
         return state.historyIndex < state.history.length - 1;
+      },
+
+      // 履歴の任意地点へジャンプ（履歴パネルから呼ぶ）
+      // targetIndex === -1 は「最初の状態」（最古アクションの beforeData）を意味する
+      jumpToHistory: (targetIndex) => {
+        const state = get();
+        if (state.history.length === 0) return;
+
+        // 範囲を [-1, history.length - 1] にクランプ
+        const clamped = Math.max(-1, Math.min(targetIndex, state.history.length - 1));
+
+        const targetData =
+          clamped < 0
+            ? state.history[0]?.data.beforeData
+            : state.history[clamped]?.data.afterData;
+
+        if (!targetData) return;
+
+        set({
+          data: targetData,
+          historyIndex: clamped,
+          hasUnsavedChanges: true,
+          // ジャンプ後は選択がずれる可能性があるためクリア
+          selectedCell: null,
+          selectedRange: null,
+          editingCell: null,
+        });
       },
 
       // Row operations with history
@@ -899,6 +978,44 @@ export const useCsvStore = create<CsvState>()(
         get().addToHistory(historyAction);
       },
 
+      // 複数行をまとめて挿入（Excel挙動: N行選択 → N行挿入）
+      insertRows: (position, rowIndex, count) => {
+        const state = get();
+        if (!state.data || count <= 0) return;
+
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+        const newRows = [...state.data.rows];
+        const newBlankRows = Array.from({ length: count }, () =>
+          new Array(state.data!.headers.length).fill('')
+        );
+
+        let insertIndex: number;
+        if (state.data.rows.length === 0) {
+          insertIndex = 0;
+        } else {
+          insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
+        }
+        newRows.splice(insertIndex, 0, ...newBlankRows);
+
+        const afterData = { ...state.data, rows: newRows };
+
+        set({ data: afterData, hasUnsavedChanges: true });
+
+        get().addToHistory({
+          type: 'insert_rows',
+          data: {
+            beforeData,
+            afterData,
+            selection: { row: insertIndex, column: 0, value: '' },
+            description: `${count}行を挿入`
+          },
+          timestamp: Date.now()
+        });
+      },
+
       deleteRow: (rowIndex) => {
         const state = get();
         if (!state.data) return;
@@ -931,6 +1048,53 @@ export const useCsvStore = create<CsvState>()(
         });
 
         get().addToHistory(historyAction);
+      },
+
+      // 複数行をまとめて削除（確認ダイアログなし・Undo可能）
+      deleteRows: (rowIndices) => {
+        const state = get();
+        if (!state.data || rowIndices.length === 0) return;
+
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+
+        // 重複排除 & 降順ソートしてから splice することで index ズレを防ぐ
+        const sorted = [...new Set(rowIndices)].sort((a, b) => b - a);
+        const newRows = [...state.data.rows];
+        sorted.forEach(i => {
+          if (i >= 0 && i < newRows.length) newRows.splice(i, 1);
+        });
+
+        const afterData = { ...state.data, rows: newRows };
+
+        set({
+          data: afterData,
+          hasUnsavedChanges: true,
+          selectedRange: null,
+          selectedCell: null,
+        });
+
+        get().addToHistory({
+          type: 'delete_rows',
+          data: {
+            beforeData,
+            afterData,
+            description: `${sorted.length}行を削除`
+          },
+          timestamp: Date.now()
+        });
+      },
+
+      // 現在の行選択（type: 'row'）をまとめて削除
+      deleteSelectedRows: () => {
+        const state = get();
+        const sel = state.selectedRange;
+        if (sel?.type !== 'row') return;
+        const indices: number[] = [];
+        for (let i = sel.startRow; i <= sel.endRow; i++) indices.push(i);
+        get().deleteRows(indices);
       },
 
       duplicateRow: (rowIndex) => {
@@ -1012,6 +1176,46 @@ export const useCsvStore = create<CsvState>()(
         get().addToHistory(historyAction);
       },
 
+      // 複数列をまとめて挿入
+      insertColumns: (position, columnIndex, count) => {
+        const state = get();
+        if (!state.data || count <= 0) return;
+
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+        const insertIndex = position === 'before' ? columnIndex : columnIndex + 1;
+
+        const baseCount = state.data.headers.length;
+        const newColumnNames = Array.from({ length: count }, (_, i) => `Column ${baseCount + i + 1}`);
+
+        const newHeaders = [...state.data.headers];
+        newHeaders.splice(insertIndex, 0, ...newColumnNames);
+
+        const blanks = new Array(count).fill('');
+        const newRows = state.data.rows.map(row => {
+          const newRow = [...row];
+          newRow.splice(insertIndex, 0, ...blanks);
+          return newRow;
+        });
+
+        const afterData = { ...state.data, headers: newHeaders, rows: newRows };
+
+        set({ data: afterData, hasUnsavedChanges: true });
+
+        get().addToHistory({
+          type: 'insert_columns',
+          data: {
+            beforeData,
+            afterData,
+            selection: { row: 0, column: insertIndex, value: '' },
+            description: `${count}列を挿入`
+          },
+          timestamp: Date.now()
+        });
+      },
+
       deleteColumn: (columnIndex) => {
         const state = get();
         if (!state.data) return;
@@ -1052,6 +1256,62 @@ export const useCsvStore = create<CsvState>()(
         });
 
         get().addToHistory(historyAction);
+      },
+
+      // 複数列をまとめて削除（確認ダイアログなし・Undo可能）
+      deleteColumns: (columnIndices) => {
+        const state = get();
+        if (!state.data || columnIndices.length === 0) return;
+
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+
+        // 重複排除 & 降順ソートしてから splice することで index ズレを防ぐ
+        const sorted = [...new Set(columnIndices)].sort((a, b) => b - a);
+
+        const newHeaders = [...state.data.headers];
+        sorted.forEach(i => {
+          if (i >= 0 && i < newHeaders.length) newHeaders.splice(i, 1);
+        });
+
+        const newRows = state.data.rows.map(row => {
+          const newRow = [...row];
+          sorted.forEach(i => {
+            if (i >= 0 && i < newRow.length) newRow.splice(i, 1);
+          });
+          return newRow;
+        });
+
+        const afterData = { ...state.data, headers: newHeaders, rows: newRows };
+
+        set({
+          data: afterData,
+          hasUnsavedChanges: true,
+          selectedRange: null,
+          selectedCell: null,
+        });
+
+        get().addToHistory({
+          type: 'delete_columns',
+          data: {
+            beforeData,
+            afterData,
+            description: `${sorted.length}列を削除`
+          },
+          timestamp: Date.now()
+        });
+      },
+
+      // 現在の列選択（type: 'column'）をまとめて削除
+      deleteSelectedColumns: () => {
+        const state = get();
+        const sel = state.selectedRange;
+        if (sel?.type !== 'column') return;
+        const indices: number[] = [];
+        for (let i = sel.startColumn; i <= sel.endColumn; i++) indices.push(i);
+        get().deleteColumns(indices);
       },
 
       renameColumn: (columnIndex, newName) => {

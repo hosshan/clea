@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/Button';
 import { useCsvStore } from '../../store/csvStore';
 import { useTauri } from '../../hooks/useTauri';
 import { DataTypeDetection } from '../DataTypeDetection';
+import { HistoryPanel } from '../HistoryPanel';
 import { SearchReplace } from '../SearchReplace';
 import { ImportExportSettings } from '../ImportExportSettings';
 import { SortMenu } from '../SortMenu';
@@ -176,6 +177,8 @@ export function Toolbar({ onSave, onSaveAs, onOpenSearch, onNewCsv }: ToolbarPro
           >
             <Redo className="h-4 w-4" />
           </Button>
+
+          <HistoryPanel />
         </div>
 
         {/* Data Operations */}

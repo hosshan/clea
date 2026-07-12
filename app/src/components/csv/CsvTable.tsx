@@ -38,10 +38,14 @@ export function CsvTable() {
     canUndo,
     canRedo,
     addRow,
+    insertRows,
     deleteRow,
+    deleteSelectedRows,
     duplicateRow,
     addColumn,
+    insertColumns,
     deleteColumn,
+    deleteSelectedColumns,
     renameColumn,
     setColumnWidth,
     getColumnWidth,
@@ -362,7 +366,8 @@ export function CsvTable() {
   const handleRowHeaderClick = (rowIndex: number, event?: React.MouseEvent) => {
     event?.preventDefault();
     event?.stopPropagation();
-    selectRow(rowIndex);
+    // Shift+クリックでアンカーから連続する複数行を選択
+    selectRow(rowIndex, { extend: event?.shiftKey });
   };
 
   const handleColumnHeaderClick = (
@@ -371,7 +376,34 @@ export function CsvTable() {
   ) => {
     event?.preventDefault();
     event?.stopPropagation();
-    selectColumn(columnIndex);
+    // Shift+クリックでアンカーから連続する複数列を選択
+    selectColumn(columnIndex, { extend: event?.shiftKey });
+  };
+
+  // 指定行が現在の行選択に含まれるか、および選択行数を返す
+  const rowSelectionInfo = (rowIndex: number) => {
+    const inSelection =
+      selectedRange?.type === "row" &&
+      selectedRange.startRow <= rowIndex &&
+      selectedRange.endRow >= rowIndex;
+    const count =
+      inSelection && selectedRange
+        ? selectedRange.endRow - selectedRange.startRow + 1
+        : 1;
+    return { inSelection, count };
+  };
+
+  // 指定列が現在の列選択に含まれるか、および選択列数を返す
+  const columnSelectionInfo = (columnIndex: number) => {
+    const inSelection =
+      selectedRange?.type === "column" &&
+      selectedRange.startColumn <= columnIndex &&
+      selectedRange.endColumn >= columnIndex;
+    const count =
+      inSelection && selectedRange
+        ? selectedRange.endColumn - selectedRange.startColumn + 1
+        : 1;
+    return { inSelection, count };
   };
 
   const handleCellDoubleClick = (row: number, column: number) => {
@@ -394,6 +426,20 @@ export function CsvTable() {
     // Handle clipboard and history operations
     if (e.ctrlKey || e.metaKey) {
       switch (e.key) {
+        // Cmd/Ctrl + - : 選択中の行/列をまとめて削除（確認なし・Undo可能）
+        case "-":
+        case "Minus":
+          if (selectedRange?.type === "row") {
+            e.preventDefault();
+            deleteSelectedRows();
+            return;
+          }
+          if (selectedRange?.type === "column") {
+            e.preventDefault();
+            deleteSelectedColumns();
+            return;
+          }
+          break;
         case "c":
           e.preventDefault();
           copySelection().catch((error) => {
@@ -832,6 +878,10 @@ export function CsvTable() {
                       if ((e.target as Element).closest('[draggable="true"]')) {
                         return;
                       }
+                      // メニューボタン等のクリックでは列選択を変更しない（複数列選択を維持）
+                      if ((e.target as Element).closest("button")) {
+                        return;
+                      }
                       e.preventDefault();
                       e.stopPropagation();
                       handleColumnHeaderClick(virtualColumn.index, e);
@@ -921,11 +971,30 @@ export function CsvTable() {
                         displayData?.headers[virtualColumn.index] ||
                         `Column ${virtualColumn.index + 1}`
                       }
+                      selectedColumnCount={
+                        columnSelectionInfo(virtualColumn.index).count
+                      }
                       onAddColumn={(position) => {
-                        addColumn(position, virtualColumn.index);
+                        const { inSelection, count } = columnSelectionInfo(
+                          virtualColumn.index
+                        );
+                        if (inSelection && count > 1) {
+                          // 複数列選択中は選択列数ぶんまとめて挿入
+                          insertColumns(position, virtualColumn.index, count);
+                        } else {
+                          addColumn(position, virtualColumn.index);
+                        }
                       }}
                       onDeleteColumn={() => {
-                        deleteColumn(virtualColumn.index);
+                        const { inSelection } = columnSelectionInfo(
+                          virtualColumn.index
+                        );
+                        // クリックした列が選択に含まれる場合は選択全体を削除
+                        if (inSelection) {
+                          deleteSelectedColumns();
+                        } else {
+                          deleteColumn(virtualColumn.index);
+                        }
                       }}
                       onRenameColumn={(newName) => {
                         renameColumn(virtualColumn.index, newName);
@@ -1014,11 +1083,26 @@ export function CsvTable() {
                 {/* Row number */}
                 <RowMenu
                   rowIndex={virtualRow.index}
+                  selectedRowCount={rowSelectionInfo(virtualRow.index).count}
                   onAddRow={(position) => {
-                    addRow(position, virtualRow.index);
+                    const { inSelection, count } = rowSelectionInfo(
+                      virtualRow.index
+                    );
+                    if (inSelection && count > 1) {
+                      // 複数行選択中は選択行数ぶんまとめて挿入
+                      insertRows(position, virtualRow.index, count);
+                    } else {
+                      addRow(position, virtualRow.index);
+                    }
                   }}
                   onDeleteRow={() => {
-                    deleteRow(virtualRow.index);
+                    const { inSelection } = rowSelectionInfo(virtualRow.index);
+                    // 右クリックした行が選択に含まれる場合は選択全体を削除
+                    if (inSelection) {
+                      deleteSelectedRows();
+                    } else {
+                      deleteRow(virtualRow.index);
+                    }
                   }}
                   onDuplicateRow={() => {
                     duplicateRow(virtualRow.index);
@@ -1044,6 +1128,13 @@ export function CsvTable() {
                     onMouseDown={(e) => {
                       // Don't handle row selection if clicking on drag handle
                       if ((e.target as Element).closest('[draggable="true"]')) {
+                        return;
+                      }
+                      // 右クリックが既存の行選択内なら選択を維持（複数行の一括操作のため）
+                      if (
+                        e.button === 2 &&
+                        rowSelectionInfo(virtualRow.index).inSelection
+                      ) {
                         return;
                       }
                       e.preventDefault();
