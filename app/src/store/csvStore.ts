@@ -140,7 +140,10 @@ interface CsvState {
 
   // Autofill (フィル)
   fillDown: () => void;
-  fillRight: () => void;
+  fillFromHandle: (
+    origin: { r1: number; c1: number; r2: number; c2: number },
+    target: { startRow: number; startColumn: number; endRow: number; endColumn: number }
+  ) => void;
 
   // History actions
   undo: () => void;
@@ -905,40 +908,85 @@ export const useCsvStore = create<CsvState>()(
         });
       },
 
-      // 右方向フィル（Cmd/Ctrl+R 相当）
-      // 範囲選択時: 選択先頭列の値を右の列へコピー
-      // 単一セル時: 左隣セルの値をコピー
-      fillRight: () => {
+      // フィルハンドルのドラッグによるフィル。
+      // origin ブロック（元の選択）は保持し、拡張された新規セルのみを埋める。
+      // 数値が等差数列なら系列を継続（例: 1,2,3 → 4,5,6）、それ以外は元パターンをタイル。
+      fillFromHandle: (origin, target) => {
         const state = get();
         if (!state.data) return;
 
-        const sel = state.selectedRange;
+        const grewDown = target.endRow > origin.r2;
+        const grewRight = target.endColumn > origin.c2;
+        if (!grewDown && !grewRight) return;
+
         const beforeData = {
           ...state.data,
           rows: state.data.rows.map(row => [...row])
         };
         const newRows = state.data.rows.map(row => [...row]);
 
-        if (sel && sel.endColumn > sel.startColumn) {
-          for (let r = sel.startRow; r <= sel.endRow; r++) {
-            if (!newRows[r]) continue;
-            const srcVal = newRows[r][sel.startColumn] ?? '';
-            for (let c = sel.startColumn + 1; c <= sel.endColumn; c++) {
-              newRows[r][c] = srcVal;
+        // 元の値配列を count 個ぶん外挿する
+        const extrapolate = (srcValues: string[], count: number): string[] => {
+          const trimmed = srcValues.map(v => v.trim());
+          const nums = trimmed.map(v => Number(v));
+          const allNumeric =
+            trimmed.length > 0 &&
+            trimmed.every((v, i) => v !== '' && !Number.isNaN(nums[i]) && String(nums[i]) === v);
+
+          // 2つ以上の等差数列なら系列を継続
+          if (allNumeric && nums.length >= 2) {
+            const delta = nums[1] - nums[0];
+            const constant = nums.every(
+              (n, i) => i === 0 || Math.abs(n - nums[i - 1] - delta) < 1e-9
+            );
+            if (constant) {
+              const out: string[] = [];
+              let last = nums[nums.length - 1];
+              for (let k = 0; k < count; k++) {
+                last += delta;
+                out.push(String(last));
+              }
+              return out;
             }
           }
-        } else if (state.selectedCell && state.selectedCell.column > 0) {
-          const { row, column } = state.selectedCell;
-          if (newRows[row]) newRows[row][column] = newRows[row][column - 1] ?? '';
-        } else {
-          return; // フィル対象なし
+
+          // それ以外（単一数値/文字列/非等差）は元パターンをタイル
+          return Array.from({ length: count }, (_, k) => srcValues[k % srcValues.length]);
+        };
+
+        if (grewDown) {
+          const count = target.endRow - origin.r2;
+          for (let c = origin.c1; c <= origin.c2; c++) {
+            const src: string[] = [];
+            for (let r = origin.r1; r <= origin.r2; r++) src.push(newRows[r]?.[c] ?? '');
+            const filled = extrapolate(src, count);
+            for (let k = 0; k < count; k++) {
+              const r = origin.r2 + 1 + k;
+              if (newRows[r]) newRows[r][c] = filled[k];
+            }
+          }
+        } else if (grewRight) {
+          const count = target.endColumn - origin.c2;
+          for (let r = origin.r1; r <= origin.r2; r++) {
+            if (!newRows[r]) continue;
+            const src: string[] = [];
+            for (let c = origin.c1; c <= origin.c2; c++) src.push(newRows[r][c] ?? '');
+            const filled = extrapolate(src, count);
+            for (let k = 0; k < count; k++) {
+              newRows[r][origin.c2 + 1 + k] = filled[k];
+            }
+          }
         }
 
         const afterData = { ...state.data, rows: newRows };
         set({ data: afterData, hasUnsavedChanges: true });
         get().addToHistory({
           type: 'replace_all',
-          data: { beforeData, afterData, description: '右方向にフィル' },
+          data: {
+            beforeData,
+            afterData,
+            description: grewDown ? '下方向にフィル' : '右方向にフィル'
+          },
           timestamp: Date.now()
         });
       },

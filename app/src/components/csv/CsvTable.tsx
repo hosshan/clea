@@ -36,7 +36,7 @@ export function CsvTable() {
     paste,
     deleteSelection,
     fillDown,
-    fillRight,
+    fillFromHandle,
     undo,
     redo,
     canUndo,
@@ -240,11 +240,14 @@ export function CsvTable() {
       if (!origin) return;
       const sel = useCsvStore.getState().selectedRange;
       if (!sel) return;
-      // 伸びた軸方向にフィルを実行
-      if (sel.endRow > origin.r2) {
-        fillDown();
-      } else if (sel.endColumn > origin.c2) {
-        fillRight();
+      // 伸びた軸方向に系列を考慮してフィル（元ブロックは保持）
+      if (sel.endRow > origin.r2 || sel.endColumn > origin.c2) {
+        fillFromHandle(origin, {
+          startRow: sel.startRow,
+          startColumn: sel.startColumn,
+          endRow: sel.endRow,
+          endColumn: sel.endColumn,
+        });
       }
     };
 
@@ -254,7 +257,7 @@ export function CsvTable() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [isFilling, data, selectRange, fillDown, fillRight]);
+  }, [isFilling, data, selectRange, fillFromHandle]);
 
   // Register scroll callback for search navigation
   useEffect(() => {
