@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils";
 import { ColumnMenu } from "../ColumnMenu";
 import { RowMenu } from "../RowMenu";
 import { CellContextMenu, type CellMenuState } from "../CellContextMenu";
+import { HeaderContextMenu, type HeaderMenuState } from "../HeaderContextMenu";
 import { ColumnResizeHandle } from "./ColumnResizeHandle";
 import { DragHandle } from "./DragHandle";
 import { DropZoneIndicator } from "./DropZoneIndicator";
@@ -79,6 +80,8 @@ export function CsvTable() {
 
   // データセルの右クリックメニュー状態
   const [cellMenu, setCellMenu] = useState<CellMenuState | null>(null);
+  // 列ヘッダーの右クリックメニュー状態
+  const [headerMenu, setHeaderMenu] = useState<HeaderMenuState | null>(null);
   // type-to-edit: 印字文字で編集開始する際の初期値をレイアウト効果に伝えるためのref
   const pendingInitialEdit = useRef<string | null>(null);
   // フィルハンドルのドラッグ状態
@@ -580,6 +583,24 @@ export function CsvTable() {
       selectCell({ row, column, value: data.rows[row]?.[column] || "" });
     }
     setCellMenu({ x: event.clientX, y: event.clientY, row, column });
+  };
+
+  const handleHeaderContextMenu = (
+    columnIndex: number,
+    event: React.MouseEvent
+  ) => {
+    if (!data) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // 右クリックした列が選択外なら、その列を単独選択
+    const isInSelection =
+      selectedRange?.type === "column" &&
+      selectedRange.startColumn <= columnIndex &&
+      selectedRange.endColumn >= columnIndex;
+    if (!isInSelection) {
+      selectColumn(columnIndex);
+    }
+    setHeaderMenu({ x: event.clientX, y: event.clientY, columnIndex });
   };
 
   // セルメニューの挿入/削除対象（選択範囲内なら範囲全体、そうでなければ単一セルの行/列）
@@ -1140,6 +1161,9 @@ export function CsvTable() {
                     }
                     onDragLeave={handlers.onDragLeave}
                     onDragEnter={(e) => e.preventDefault()}
+                    onContextMenu={(e) =>
+                      handleHeaderContextMenu(virtualColumn.index, e)
+                    }
                     onDoubleClick={(e) => {
                       // Don't start editing if clicking on drag handle or menu
                       if (
@@ -1632,6 +1656,63 @@ export function CsvTable() {
                 insertColumns("after", menuColumn, columns.length)
               }
               onDeleteColumn={() => deleteColumns(columns)}
+            />
+          );
+        })()}
+
+      {/* 列ヘッダーの右クリックメニュー */}
+      {headerMenu &&
+        (() => {
+          const menuColumn = headerMenu.columnIndex;
+          const { inSelection, count } = columnSelectionInfo(menuColumn);
+          const effectiveCount = inSelection ? count : 1;
+          const columnDeleteLabel =
+            effectiveCount > 1
+              ? `${effectiveCount}列を削除`
+              : "列を削除";
+          const addBeforeLabel =
+            effectiveCount > 1
+              ? `前に${effectiveCount}列追加`
+              : "前に列を追加";
+          const addAfterLabel =
+            effectiveCount > 1
+              ? `後に${effectiveCount}列追加`
+              : "後に列を追加";
+          return (
+            <HeaderContextMenu
+              state={headerMenu}
+              onClose={() => setHeaderMenu(null)}
+              columnDeleteLabel={columnDeleteLabel}
+              addBeforeLabel={addBeforeLabel}
+              addAfterLabel={addAfterLabel}
+              onRename={() => {
+                const currentName =
+                  displayData?.headers[menuColumn] ||
+                  `Column ${menuColumn + 1}`;
+                setHeaderEditValue(currentName);
+                setEditingHeaderColumn(menuColumn);
+              }}
+              onInsertColumnBefore={() => {
+                if (inSelection && count > 1) {
+                  insertColumns("before", menuColumn, count);
+                } else {
+                  addColumn("before", menuColumn);
+                }
+              }}
+              onInsertColumnAfter={() => {
+                if (inSelection && count > 1) {
+                  insertColumns("after", menuColumn, count);
+                } else {
+                  addColumn("after", menuColumn);
+                }
+              }}
+              onDeleteColumn={() => {
+                if (inSelection) {
+                  deleteSelectedColumns();
+                } else {
+                  deleteColumn(menuColumn);
+                }
+              }}
             />
           );
         })()}

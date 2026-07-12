@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use chrono;
 use crate::commands::csv::SortState;
-use crate::chat::ChatHistory;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewState {
     #[serde(default)]
     pub column_widths: HashMap<usize, f64>,
@@ -18,6 +18,7 @@ pub struct ViewState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewportRange {
     pub start_row: usize,
     pub end_row: usize,
@@ -26,6 +27,7 @@ pub struct ViewportRange {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CsvMetadata {
     pub filename: String,
     pub path: String,
@@ -40,8 +42,6 @@ pub struct CsvMetadata {
     pub sort_state: Option<SortState>,
     #[serde(default)]
     pub view_state: Option<ViewState>,
-    #[serde(default)]
-    pub chat_history: Option<ChatHistory>,
 }
 
 impl CsvMetadata {
@@ -70,7 +70,6 @@ impl CsvMetadata {
             last_modified,
             sort_state: None,
             view_state: None,
-            chat_history: None,
         })
     }
 
@@ -92,7 +91,6 @@ impl CsvMetadata {
             last_modified: chrono::Local::now().to_rfc3339(),
             sort_state: None,
             view_state: None,
-            chat_history: None,
         }
     }
 }
@@ -114,14 +112,6 @@ impl MetadataManager {
         if meta_path.exists() {
             let content = fs::read_to_string(&meta_path)?;
             let metadata: CsvMetadata = serde_json::from_str(&content)?;
-            
-            // Migration: Ensure chat_history field exists (backward compatibility)
-            // #[serde(default)] handles this automatically, but we can add explicit migration here if needed
-            if metadata.chat_history.is_none() {
-                // Field is already None by default, no action needed
-                // This ensures backward compatibility with existing .csvmeta files
-            }
-            
             self.metadata_cache = Some(metadata.clone());
             Ok(metadata)
         } else {
@@ -148,52 +138,5 @@ impl MetadataManager {
     #[allow(dead_code)]
     pub fn get_cached(&self) -> Option<&CsvMetadata> {
         self.metadata_cache.as_ref()
-    }
-
-    /// Save chat history to metadata
-    pub fn save_chat_history(&mut self, csv_path: &Path, history: ChatHistory) -> Result<()> {
-        // Load existing metadata or create new
-        let mut metadata = self.load_metadata(csv_path)?;
-        
-        // Update chat history
-        metadata.chat_history = Some(history);
-        
-        // Save updated metadata
-        self.save_metadata(csv_path, &metadata)?;
-        
-        // Update cache
-        self.metadata_cache = Some(metadata);
-        
-        Ok(())
-    }
-
-    /// Load chat history from metadata
-    pub fn load_chat_history(&mut self, csv_path: &Path) -> Result<Option<ChatHistory>> {
-        let metadata = self.load_metadata(csv_path)?;
-        Ok(metadata.chat_history)
-    }
-
-    /// Add a message to chat history
-    #[allow(dead_code)]
-    pub fn add_chat_message(&mut self, csv_path: &Path, message: crate::chat::message::ChatMessage) -> Result<()> {
-        let mut metadata = self.load_metadata(csv_path)?;
-        
-        // Get or create chat history
-        let mut history = metadata.chat_history
-            .unwrap_or_else(|| ChatHistory::new(csv_path.to_string_lossy().to_string()));
-        
-        // Add message
-        history.add_message(message);
-        
-        // Update metadata
-        metadata.chat_history = Some(history);
-        
-        // Save updated metadata
-        self.save_metadata(csv_path, &metadata)?;
-        
-        // Update cache
-        self.metadata_cache = Some(metadata);
-        
-        Ok(())
     }
 }

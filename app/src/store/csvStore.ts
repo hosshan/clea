@@ -319,7 +319,7 @@ export const useCsvStore = create<CsvState>()(
           anchorRow: anchor,
           anchorColumn: 0,
           focusRow: rowIndex,
-          focusColumn: state.data.headers.length - 1
+          focusColumn: 0
         };
 
         set({ selectedRange: selection, selectedCell: null });
