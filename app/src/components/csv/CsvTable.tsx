@@ -23,6 +23,7 @@ export function CsvTable() {
     selectedRange,
     editingCell,
     selectCell,
+    selectRange,
     selectRow,
     selectColumn,
     selectAll,
@@ -34,6 +35,8 @@ export function CsvTable() {
     cutSelection,
     paste,
     deleteSelection,
+    fillDown,
+    fillRight,
     undo,
     redo,
     canUndo,
@@ -78,6 +81,14 @@ export function CsvTable() {
   const [cellMenu, setCellMenu] = useState<CellMenuState | null>(null);
   // type-to-edit: 印字文字で編集開始する際の初期値をレイアウト効果に伝えるためのref
   const pendingInitialEdit = useRef<string | null>(null);
+  // フィルハンドルのドラッグ状態
+  const [isFilling, setIsFilling] = useState(false);
+  const fillOriginRef = useRef<{
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+  } | null>(null);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -180,6 +191,70 @@ export function CsvTable() {
       headerInputRef.current.select();
     }
   }, [editingHeaderColumn]);
+
+  // フィルハンドルのドラッグ処理（マウス移動でプレビュー、離すとフィル実行）
+  useEffect(() => {
+    if (!isFilling) return;
+
+    const onMove = (e: MouseEvent) => {
+      const origin = fillOriginRef.current;
+      if (!origin || !data) return;
+      const el = document.elementFromPoint(
+        e.clientX,
+        e.clientY
+      ) as HTMLElement | null;
+      const cellEl = el?.closest("[data-row-index]") as HTMLElement | null;
+      if (!cellEl) return;
+      const tr = parseInt(cellEl.dataset.rowIndex ?? "", 10);
+      const tc = parseInt(cellEl.dataset.columnIndex ?? "", 10);
+      if (Number.isNaN(tr) || Number.isNaN(tc)) return;
+
+      // 起点の右下からの伸び量が大きい軸方向にプレビューを拡張
+      const dRow = Math.max(0, tr - origin.r2);
+      const dCol = Math.max(0, tc - origin.c2);
+      let endRow = origin.r2;
+      let endColumn = origin.c2;
+      if (dRow >= dCol) {
+        endRow = Math.max(origin.r2, tr);
+      } else {
+        endColumn = Math.max(origin.c2, tc);
+      }
+
+      selectRange({
+        startRow: origin.r1,
+        startColumn: origin.c1,
+        endRow,
+        endColumn,
+        type: "range",
+        anchorRow: origin.r1,
+        anchorColumn: origin.c1,
+        focusRow: endRow,
+        focusColumn: endColumn,
+      });
+    };
+
+    const onUp = () => {
+      const origin = fillOriginRef.current;
+      fillOriginRef.current = null;
+      setIsFilling(false);
+      if (!origin) return;
+      const sel = useCsvStore.getState().selectedRange;
+      if (!sel) return;
+      // 伸びた軸方向にフィルを実行
+      if (sel.endRow > origin.r2) {
+        fillDown();
+      } else if (sel.endColumn > origin.c2) {
+        fillRight();
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isFilling, data, selectRange, fillDown, fillRight]);
 
   // Register scroll callback for search navigation
   useEffect(() => {
@@ -429,6 +504,44 @@ export function CsvTable() {
     return Math.max(1, Math.floor(viewportHeight / rowHeight) - 1);
   };
 
+  // 指定セルがフィルハンドルを表示すべき位置（現在の選択の右下）か
+  const isFillHandleCell = (row: number, column: number) => {
+    if (editingCell) return false;
+    if (selectedCell) {
+      return selectedCell.row === row && selectedCell.column === column;
+    }
+    if (selectedRange?.type === "range") {
+      return selectedRange.endRow === row && selectedRange.endColumn === column;
+    }
+    return false;
+  };
+
+  // フィルハンドルのドラッグ開始
+  const startFill = (e: React.MouseEvent) => {
+    if (!data) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let bounds: { r1: number; c1: number; r2: number; c2: number } | null = null;
+    if (selectedCell) {
+      bounds = {
+        r1: selectedCell.row,
+        c1: selectedCell.column,
+        r2: selectedCell.row,
+        c2: selectedCell.column,
+      };
+    } else if (selectedRange?.type === "range") {
+      bounds = {
+        r1: selectedRange.startRow,
+        c1: selectedRange.startColumn,
+        r2: selectedRange.endRow,
+        c2: selectedRange.endColumn,
+      };
+    }
+    if (!bounds) return;
+    fillOriginRef.current = bounds;
+    setIsFilling(true);
+  };
+
   const handleCellDoubleClick = (row: number, column: number) => {
     if (!data) return;
 
@@ -529,6 +642,11 @@ export function CsvTable() {
         case "v":
           e.preventDefault();
           paste();
+          return;
+        case "d":
+          // Cmd/Ctrl + D : 下方向フィル
+          e.preventDefault();
+          fillDown();
           return;
         case "z":
           e.preventDefault();
@@ -1454,6 +1572,15 @@ export function CsvTable() {
                           {cellValue}
                         </span>
                       )}
+                      {/* フィルハンドル（選択の右下） */}
+                      {isFillHandleCell(virtualRow.index, virtualColumn.index) &&
+                        !isEditing && (
+                          <div
+                            className="absolute -bottom-[3px] -right-[3px] h-[7px] w-[7px] cursor-crosshair rounded-[1px] bg-primary border border-background z-30"
+                            onMouseDown={startFill}
+                            title="ドラッグしてフィル"
+                          />
+                        )}
                     </div>
                   );
                 })}

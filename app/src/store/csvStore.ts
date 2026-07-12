@@ -138,6 +138,10 @@ interface CsvState {
   paste: (targetCell?: CsvCell) => void;
   deleteSelection: () => void;
 
+  // Autofill (フィル)
+  fillDown: () => void;
+  fillRight: () => void;
+
   // History actions
   undo: () => void;
   redo: () => void;
@@ -862,6 +866,81 @@ export const useCsvStore = create<CsvState>()(
 
         // Add to history after state update
         get().addToHistory(historyAction);
+      },
+
+      // 下方向フィル（Cmd/Ctrl+D 相当）
+      // 範囲選択時: 選択先頭行の値を下の行へコピー
+      // 単一セル時: 直上セルの値をコピー
+      fillDown: () => {
+        const state = get();
+        if (!state.data) return;
+
+        const sel = state.selectedRange;
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+        const newRows = state.data.rows.map(row => [...row]);
+
+        if (sel && sel.endRow > sel.startRow) {
+          for (let c = sel.startColumn; c <= sel.endColumn; c++) {
+            const srcVal = newRows[sel.startRow]?.[c] ?? '';
+            for (let r = sel.startRow + 1; r <= sel.endRow; r++) {
+              if (newRows[r]) newRows[r][c] = srcVal;
+            }
+          }
+        } else if (state.selectedCell && state.selectedCell.row > 0) {
+          const { row, column } = state.selectedCell;
+          newRows[row][column] = newRows[row - 1]?.[column] ?? '';
+        } else {
+          return; // フィル対象なし
+        }
+
+        const afterData = { ...state.data, rows: newRows };
+        set({ data: afterData, hasUnsavedChanges: true });
+        get().addToHistory({
+          type: 'replace_all',
+          data: { beforeData, afterData, description: '下方向にフィル' },
+          timestamp: Date.now()
+        });
+      },
+
+      // 右方向フィル（Cmd/Ctrl+R 相当）
+      // 範囲選択時: 選択先頭列の値を右の列へコピー
+      // 単一セル時: 左隣セルの値をコピー
+      fillRight: () => {
+        const state = get();
+        if (!state.data) return;
+
+        const sel = state.selectedRange;
+        const beforeData = {
+          ...state.data,
+          rows: state.data.rows.map(row => [...row])
+        };
+        const newRows = state.data.rows.map(row => [...row]);
+
+        if (sel && sel.endColumn > sel.startColumn) {
+          for (let r = sel.startRow; r <= sel.endRow; r++) {
+            if (!newRows[r]) continue;
+            const srcVal = newRows[r][sel.startColumn] ?? '';
+            for (let c = sel.startColumn + 1; c <= sel.endColumn; c++) {
+              newRows[r][c] = srcVal;
+            }
+          }
+        } else if (state.selectedCell && state.selectedCell.column > 0) {
+          const { row, column } = state.selectedCell;
+          if (newRows[row]) newRows[row][column] = newRows[row][column - 1] ?? '';
+        } else {
+          return; // フィル対象なし
+        }
+
+        const afterData = { ...state.data, rows: newRows };
+        set({ data: afterData, hasUnsavedChanges: true });
+        get().addToHistory({
+          type: 'replace_all',
+          data: { beforeData, afterData, description: '右方向にフィル' },
+          timestamp: Date.now()
+        });
       },
 
       // History operations
