@@ -71,8 +71,8 @@ export interface SortState {
 
 export interface HistoryAction {
   type: 'cell_update' | 'range_update' | 'paste' | 'delete' | 'cut' |
-        'add_row' | 'delete_row' | 'duplicate_row' |
-        'add_column' | 'delete_column' | 'rename_column' |
+        'add_row' | 'delete_row' | 'delete_rows' | 'insert_rows' | 'duplicate_row' |
+        'add_column' | 'delete_column' | 'delete_columns' | 'insert_columns' | 'rename_column' |
         'replace_all' | 'replace_current';
   data: {
     beforeData: CsvData;
@@ -80,6 +80,8 @@ export interface HistoryAction {
     selection?: CsvCell | CsvSelection;
     description?: string;
   };
+  /** 履歴パネル表示用の人間可読ラベル（addToHistory で自動付与） */
+  label?: string;
   timestamp: number;
 }
 

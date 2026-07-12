@@ -4,6 +4,8 @@ import { useCsvStore } from "../../store/csvStore";
 import { cn } from "../../lib/utils";
 import { ColumnMenu } from "../ColumnMenu";
 import { RowMenu } from "../RowMenu";
+import { CellContextMenu, type CellMenuState } from "../CellContextMenu";
+import { HeaderContextMenu, type HeaderMenuState } from "../HeaderContextMenu";
 import { ColumnResizeHandle } from "./ColumnResizeHandle";
 import { DragHandle } from "./DragHandle";
 import { DropZoneIndicator } from "./DropZoneIndicator";
@@ -22,6 +24,7 @@ export function CsvTable() {
     selectedRange,
     editingCell,
     selectCell,
+    selectRange,
     selectRow,
     selectColumn,
     selectAll,
@@ -33,16 +36,25 @@ export function CsvTable() {
     cutSelection,
     paste,
     deleteSelection,
+    fillDown,
+    fillFromHandle,
     undo,
     redo,
     canUndo,
     canRedo,
     addRow,
+    insertRows,
     deleteRow,
+    deleteRows,
+    deleteSelectedRows,
     duplicateRow,
     addColumn,
+    insertColumns,
     deleteColumn,
+    deleteColumns,
+    deleteSelectedColumns,
     renameColumn,
+    clipboard,
     setColumnWidth,
     getColumnWidth,
     columnWidths,
@@ -65,6 +77,21 @@ export function CsvTable() {
   );
   const [headerEditValue, setHeaderEditValue] = useState("");
   const headerInputRef = useRef<HTMLInputElement>(null);
+
+  // データセルの右クリックメニュー状態
+  const [cellMenu, setCellMenu] = useState<CellMenuState | null>(null);
+  // 列ヘッダーの右クリックメニュー状態
+  const [headerMenu, setHeaderMenu] = useState<HeaderMenuState | null>(null);
+  // type-to-edit: 印字文字で編集開始する際の初期値をレイアウト効果に伝えるためのref
+  const pendingInitialEdit = useRef<string | null>(null);
+  // フィルハンドルのドラッグ状態
+  const [isFilling, setIsFilling] = useState(false);
+  const fillOriginRef = useRef<{
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+  } | null>(null);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -148,8 +175,15 @@ export function CsvTable() {
 
   useLayoutEffect(() => {
     if (editingCell && data) {
-      const cellValue = data.rows[editingCell.row]?.[editingCell.column] || "";
-      setEditValue(cellValue);
+      // type-to-edit で編集開始した場合は、タイプした文字を初期値にする（既存内容を置換）
+      if (pendingInitialEdit.current !== null) {
+        setEditValue(pendingInitialEdit.current);
+        pendingInitialEdit.current = null;
+      } else {
+        const cellValue =
+          data.rows[editingCell.row]?.[editingCell.column] || "";
+        setEditValue(cellValue);
+      }
     }
   }, [editingCell, data]);
 
@@ -160,6 +194,73 @@ export function CsvTable() {
       headerInputRef.current.select();
     }
   }, [editingHeaderColumn]);
+
+  // フィルハンドルのドラッグ処理（マウス移動でプレビュー、離すとフィル実行）
+  useEffect(() => {
+    if (!isFilling) return;
+
+    const onMove = (e: MouseEvent) => {
+      const origin = fillOriginRef.current;
+      if (!origin || !data) return;
+      const el = document.elementFromPoint(
+        e.clientX,
+        e.clientY
+      ) as HTMLElement | null;
+      const cellEl = el?.closest("[data-row-index]") as HTMLElement | null;
+      if (!cellEl) return;
+      const tr = parseInt(cellEl.dataset.rowIndex ?? "", 10);
+      const tc = parseInt(cellEl.dataset.columnIndex ?? "", 10);
+      if (Number.isNaN(tr) || Number.isNaN(tc)) return;
+
+      // 起点の右下からの伸び量が大きい軸方向にプレビューを拡張
+      const dRow = Math.max(0, tr - origin.r2);
+      const dCol = Math.max(0, tc - origin.c2);
+      let endRow = origin.r2;
+      let endColumn = origin.c2;
+      if (dRow >= dCol) {
+        endRow = Math.max(origin.r2, tr);
+      } else {
+        endColumn = Math.max(origin.c2, tc);
+      }
+
+      selectRange({
+        startRow: origin.r1,
+        startColumn: origin.c1,
+        endRow,
+        endColumn,
+        type: "range",
+        anchorRow: origin.r1,
+        anchorColumn: origin.c1,
+        focusRow: endRow,
+        focusColumn: endColumn,
+      });
+    };
+
+    const onUp = () => {
+      const origin = fillOriginRef.current;
+      fillOriginRef.current = null;
+      setIsFilling(false);
+      if (!origin) return;
+      const sel = useCsvStore.getState().selectedRange;
+      if (!sel) return;
+      // 伸びた軸方向に系列を考慮してフィル（元ブロックは保持）
+      if (sel.endRow > origin.r2 || sel.endColumn > origin.c2) {
+        fillFromHandle(origin, {
+          startRow: sel.startRow,
+          startColumn: sel.startColumn,
+          endRow: sel.endRow,
+          endColumn: sel.endColumn,
+        });
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isFilling, data, selectRange, fillFromHandle]);
 
   // Register scroll callback for search navigation
   useEffect(() => {
@@ -362,7 +463,8 @@ export function CsvTable() {
   const handleRowHeaderClick = (rowIndex: number, event?: React.MouseEvent) => {
     event?.preventDefault();
     event?.stopPropagation();
-    selectRow(rowIndex);
+    // Shift+クリックでアンカーから連続する複数行を選択
+    selectRow(rowIndex, { extend: event?.shiftKey });
   };
 
   const handleColumnHeaderClick = (
@@ -371,7 +473,79 @@ export function CsvTable() {
   ) => {
     event?.preventDefault();
     event?.stopPropagation();
-    selectColumn(columnIndex);
+    // Shift+クリックでアンカーから連続する複数列を選択
+    selectColumn(columnIndex, { extend: event?.shiftKey });
+  };
+
+  // 指定行が現在の行選択に含まれるか、および選択行数を返す
+  const rowSelectionInfo = (rowIndex: number) => {
+    const inSelection =
+      selectedRange?.type === "row" &&
+      selectedRange.startRow <= rowIndex &&
+      selectedRange.endRow >= rowIndex;
+    const count =
+      inSelection && selectedRange
+        ? selectedRange.endRow - selectedRange.startRow + 1
+        : 1;
+    return { inSelection, count };
+  };
+
+  // 指定列が現在の列選択に含まれるか、および選択列数を返す
+  const columnSelectionInfo = (columnIndex: number) => {
+    const inSelection =
+      selectedRange?.type === "column" &&
+      selectedRange.startColumn <= columnIndex &&
+      selectedRange.endColumn >= columnIndex;
+    const count =
+      inSelection && selectedRange
+        ? selectedRange.endColumn - selectedRange.startColumn + 1
+        : 1;
+    return { inSelection, count };
+  };
+
+  // PageUp/PageDown の1ページ分の行数を可視領域から概算
+  const getPageSize = () => {
+    const viewportHeight = parentRef.current?.clientHeight ?? 700;
+    const rowHeight = wrapText ? 80 : 35;
+    return Math.max(1, Math.floor(viewportHeight / rowHeight) - 1);
+  };
+
+  // 指定セルがフィルハンドルを表示すべき位置（現在の選択の右下）か
+  const isFillHandleCell = (row: number, column: number) => {
+    if (editingCell) return false;
+    if (selectedCell) {
+      return selectedCell.row === row && selectedCell.column === column;
+    }
+    if (selectedRange?.type === "range") {
+      return selectedRange.endRow === row && selectedRange.endColumn === column;
+    }
+    return false;
+  };
+
+  // フィルハンドルのドラッグ開始
+  const startFill = (e: React.MouseEvent) => {
+    if (!data) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let bounds: { r1: number; c1: number; r2: number; c2: number } | null = null;
+    if (selectedCell) {
+      bounds = {
+        r1: selectedCell.row,
+        c1: selectedCell.column,
+        r2: selectedCell.row,
+        c2: selectedCell.column,
+      };
+    } else if (selectedRange?.type === "range") {
+      bounds = {
+        r1: selectedRange.startRow,
+        c1: selectedRange.startColumn,
+        r2: selectedRange.endRow,
+        c2: selectedRange.endColumn,
+      };
+    }
+    if (!bounds) return;
+    fillOriginRef.current = bounds;
+    setIsFilling(true);
   };
 
   const handleCellDoubleClick = (row: number, column: number) => {
@@ -379,6 +553,77 @@ export function CsvTable() {
 
     const cell = { row, column, value: data.rows[row]?.[column] || "" };
     startEditing(cell);
+  };
+
+  // 指定セルが現在の選択に含まれるか
+  const isCellInSelection = (row: number, column: number) => {
+    if (selectedCell) {
+      return selectedCell.row === row && selectedCell.column === column;
+    }
+    if (selectedRange) {
+      return (
+        row >= selectedRange.startRow &&
+        row <= selectedRange.endRow &&
+        column >= selectedRange.startColumn &&
+        column <= selectedRange.endColumn
+      );
+    }
+    return false;
+  };
+
+  const handleCellContextMenu = (
+    row: number,
+    column: number,
+    event: React.MouseEvent
+  ) => {
+    if (!data) return;
+    event.preventDefault();
+    // 右クリックしたセルが選択外なら、そのセルを単独選択（Excel挙動）
+    if (!isCellInSelection(row, column)) {
+      selectCell({ row, column, value: data.rows[row]?.[column] || "" });
+    }
+    setCellMenu({ x: event.clientX, y: event.clientY, row, column });
+  };
+
+  const handleHeaderContextMenu = (
+    columnIndex: number,
+    event: React.MouseEvent
+  ) => {
+    if (!data) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // 右クリックした列が選択外なら、その列を単独選択
+    const isInSelection =
+      selectedRange?.type === "column" &&
+      selectedRange.startColumn <= columnIndex &&
+      selectedRange.endColumn >= columnIndex;
+    if (!isInSelection) {
+      selectColumn(columnIndex);
+    }
+    setHeaderMenu({ x: event.clientX, y: event.clientY, columnIndex });
+  };
+
+  // セルメニューの挿入/削除対象（選択範囲内なら範囲全体、そうでなければ単一セルの行/列）
+  const computeMenuTargets = () => {
+    if (!cellMenu) return { rows: [] as number[], columns: [] as number[] };
+    const within =
+      !!selectedRange &&
+      cellMenu.row >= selectedRange.startRow &&
+      cellMenu.row <= selectedRange.endRow &&
+      cellMenu.column >= selectedRange.startColumn &&
+      cellMenu.column <= selectedRange.endColumn;
+    const rows: number[] = [];
+    const columns: number[] = [];
+    if (within && selectedRange) {
+      for (let r = selectedRange.startRow; r <= selectedRange.endRow; r++)
+        rows.push(r);
+      for (let c = selectedRange.startColumn; c <= selectedRange.endColumn; c++)
+        columns.push(c);
+    } else {
+      rows.push(cellMenu.row);
+      columns.push(cellMenu.column);
+    }
+    return { rows, columns };
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -394,6 +639,20 @@ export function CsvTable() {
     // Handle clipboard and history operations
     if (e.ctrlKey || e.metaKey) {
       switch (e.key) {
+        // Cmd/Ctrl + - : 選択中の行/列をまとめて削除（確認なし・Undo可能）
+        case "-":
+        case "Minus":
+          if (selectedRange?.type === "row") {
+            e.preventDefault();
+            deleteSelectedRows();
+            return;
+          }
+          if (selectedRange?.type === "column") {
+            e.preventDefault();
+            deleteSelectedColumns();
+            return;
+          }
+          break;
         case "c":
           e.preventDefault();
           copySelection().catch((error) => {
@@ -407,6 +666,11 @@ export function CsvTable() {
         case "v":
           e.preventDefault();
           paste();
+          return;
+        case "d":
+          // Cmd/Ctrl + D : 下方向フィル
+          e.preventDefault();
+          fillDown();
           return;
         case "z":
           e.preventDefault();
@@ -484,6 +748,28 @@ export function CsvTable() {
 
     let newRow = row;
     let newColumn = column;
+
+    // Type-to-edit: 印字可能文字で編集を開始し、その文字で内容を置き換える（Excel/Sheets挙動）
+    if (e.key.length === 1 && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      let editRow = row;
+      let editColumn = column;
+      // 行/列選択時はアクティブセルを先頭側に寄せる
+      if (selectedRange?.type === "row") {
+        editColumn = selectedRange.startColumn;
+      } else if (selectedRange?.type === "column") {
+        editRow = selectedRange.startRow;
+      }
+      const cell = {
+        row: editRow,
+        column: editColumn,
+        value: data.rows[editRow]?.[editColumn] || "",
+      };
+      e.preventDefault();
+      pendingInitialEdit.current = e.key;
+      selectCell(cell);
+      startEditing(cell);
+      return;
+    }
 
     // Handle shift+arrow keys for range selection
     if (e.shiftKey) {
@@ -626,6 +912,18 @@ export function CsvTable() {
           e.preventDefault();
           newColumn = data.headers.length - 1; // Jump to last column
           break;
+        case "Home":
+          // Cmd/Ctrl + Home: 先頭セル(A1)へ
+          e.preventDefault();
+          newRow = 0;
+          newColumn = 0;
+          break;
+        case "End":
+          // Cmd/Ctrl + End: 最終セルへ
+          e.preventDefault();
+          newRow = data.rows.length - 1;
+          newColumn = data.headers.length - 1;
+          break;
         default:
           // Let other Cmd/Ctrl combinations pass through
           break;
@@ -648,6 +946,24 @@ export function CsvTable() {
         case "ArrowRight":
           e.preventDefault();
           newColumn = Math.min(data.headers.length - 1, column + 1);
+          break;
+        case "Home":
+          // 行頭（先頭列）へ
+          e.preventDefault();
+          newColumn = 0;
+          break;
+        case "End":
+          // 行末（最終列）へ
+          e.preventDefault();
+          newColumn = data.headers.length - 1;
+          break;
+        case "PageUp":
+          e.preventDefault();
+          newRow = Math.max(0, row - getPageSize());
+          break;
+        case "PageDown":
+          e.preventDefault();
+          newRow = Math.min(data.rows.length - 1, row + getPageSize());
           break;
         case "Enter":
         case "F2":
@@ -832,6 +1148,10 @@ export function CsvTable() {
                       if ((e.target as Element).closest('[draggable="true"]')) {
                         return;
                       }
+                      // メニューボタン等のクリックでは列選択を変更しない（複数列選択を維持）
+                      if ((e.target as Element).closest("button")) {
+                        return;
+                      }
                       e.preventDefault();
                       e.stopPropagation();
                       handleColumnHeaderClick(virtualColumn.index, e);
@@ -841,6 +1161,9 @@ export function CsvTable() {
                     }
                     onDragLeave={handlers.onDragLeave}
                     onDragEnter={(e) => e.preventDefault()}
+                    onContextMenu={(e) =>
+                      handleHeaderContextMenu(virtualColumn.index, e)
+                    }
                     onDoubleClick={(e) => {
                       // Don't start editing if clicking on drag handle or menu
                       if (
@@ -921,14 +1244,38 @@ export function CsvTable() {
                         displayData?.headers[virtualColumn.index] ||
                         `Column ${virtualColumn.index + 1}`
                       }
+                      selectedColumnCount={
+                        columnSelectionInfo(virtualColumn.index).count
+                      }
                       onAddColumn={(position) => {
-                        addColumn(position, virtualColumn.index);
+                        const { inSelection, count } = columnSelectionInfo(
+                          virtualColumn.index
+                        );
+                        if (inSelection && count > 1) {
+                          // 複数列選択中は選択列数ぶんまとめて挿入
+                          insertColumns(position, virtualColumn.index, count);
+                        } else {
+                          addColumn(position, virtualColumn.index);
+                        }
                       }}
                       onDeleteColumn={() => {
-                        deleteColumn(virtualColumn.index);
+                        const { inSelection } = columnSelectionInfo(
+                          virtualColumn.index
+                        );
+                        // クリックした列が選択に含まれる場合は選択全体を削除
+                        if (inSelection) {
+                          deleteSelectedColumns();
+                        } else {
+                          deleteColumn(virtualColumn.index);
+                        }
                       }}
-                      onRenameColumn={(newName) => {
-                        renameColumn(virtualColumn.index, newName);
+                      onStartRename={() => {
+                        // モーダルを使わずヘッダのインライン編集を開始（確認レス）
+                        const currentName =
+                          displayData?.headers[virtualColumn.index] ||
+                          `Column ${virtualColumn.index + 1}`;
+                        setHeaderEditValue(currentName);
+                        setEditingHeaderColumn(virtualColumn.index);
                       }}
                     />
                     <ColumnResizeHandle
@@ -1014,11 +1361,26 @@ export function CsvTable() {
                 {/* Row number */}
                 <RowMenu
                   rowIndex={virtualRow.index}
+                  selectedRowCount={rowSelectionInfo(virtualRow.index).count}
                   onAddRow={(position) => {
-                    addRow(position, virtualRow.index);
+                    const { inSelection, count } = rowSelectionInfo(
+                      virtualRow.index
+                    );
+                    if (inSelection && count > 1) {
+                      // 複数行選択中は選択行数ぶんまとめて挿入
+                      insertRows(position, virtualRow.index, count);
+                    } else {
+                      addRow(position, virtualRow.index);
+                    }
                   }}
                   onDeleteRow={() => {
-                    deleteRow(virtualRow.index);
+                    const { inSelection } = rowSelectionInfo(virtualRow.index);
+                    // 右クリックした行が選択に含まれる場合は選択全体を削除
+                    if (inSelection) {
+                      deleteSelectedRows();
+                    } else {
+                      deleteRow(virtualRow.index);
+                    }
                   }}
                   onDuplicateRow={() => {
                     duplicateRow(virtualRow.index);
@@ -1044,6 +1406,13 @@ export function CsvTable() {
                     onMouseDown={(e) => {
                       // Don't handle row selection if clicking on drag handle
                       if ((e.target as Element).closest('[draggable="true"]')) {
+                        return;
+                      }
+                      // 右クリックが既存の行選択内なら選択を維持（複数行の一括操作のため）
+                      if (
+                        e.button === 2 &&
+                        rowSelectionInfo(virtualRow.index).inSelection
+                      ) {
                         return;
                       }
                       e.preventDefault();
@@ -1189,6 +1558,13 @@ export function CsvTable() {
                           virtualColumn.index
                         )
                       }
+                      onContextMenu={(e) =>
+                        handleCellContextMenu(
+                          virtualRow.index,
+                          virtualColumn.index,
+                          e
+                        )
+                      }
                       tabIndex={-1}
                     >
                       {isEditing ? (
@@ -1223,6 +1599,15 @@ export function CsvTable() {
                           {cellValue}
                         </span>
                       )}
+                      {/* フィルハンドル（選択の右下） */}
+                      {isFillHandleCell(virtualRow.index, virtualColumn.index) &&
+                        !isEditing && (
+                          <div
+                            className="absolute -bottom-[3px] -right-[3px] h-[7px] w-[7px] cursor-crosshair rounded-[1px] bg-primary border border-background z-30"
+                            onMouseDown={startFill}
+                            title="ドラッグしてフィル"
+                          />
+                        )}
                     </div>
                   );
                 })}
@@ -1231,6 +1616,106 @@ export function CsvTable() {
           </div>
         )}
       </div>
+
+      {/* データセルの右クリックメニュー（確認ダイアログなし・全操作 Undo 可能） */}
+      {cellMenu &&
+        (() => {
+          const { rows, columns } = computeMenuTargets();
+          const rowDeleteLabel =
+            rows.length > 1 ? `${rows.length}行を削除` : "行を削除";
+          const columnDeleteLabel =
+            columns.length > 1 ? `${columns.length}列を削除` : "列を削除";
+          const menuRow = cellMenu.row;
+          const menuColumn = cellMenu.column;
+          return (
+            <CellContextMenu
+              state={cellMenu}
+              onClose={() => setCellMenu(null)}
+              canPaste={!!clipboard}
+              rowDeleteLabel={rowDeleteLabel}
+              columnDeleteLabel={columnDeleteLabel}
+              onCut={cutSelection}
+              onCopy={() => {
+                copySelection().catch((error) => {
+                  console.error("Failed to copy selection:", error);
+                });
+              }}
+              onPaste={() => paste()}
+              onClearContents={deleteSelection}
+              onInsertRowAbove={() =>
+                insertRows("above", menuRow, rows.length)
+              }
+              onInsertRowBelow={() =>
+                insertRows("below", menuRow, rows.length)
+              }
+              onDeleteRow={() => deleteRows(rows)}
+              onInsertColumnBefore={() =>
+                insertColumns("before", menuColumn, columns.length)
+              }
+              onInsertColumnAfter={() =>
+                insertColumns("after", menuColumn, columns.length)
+              }
+              onDeleteColumn={() => deleteColumns(columns)}
+            />
+          );
+        })()}
+
+      {/* 列ヘッダーの右クリックメニュー */}
+      {headerMenu &&
+        (() => {
+          const menuColumn = headerMenu.columnIndex;
+          const { inSelection, count } = columnSelectionInfo(menuColumn);
+          const effectiveCount = inSelection ? count : 1;
+          const columnDeleteLabel =
+            effectiveCount > 1
+              ? `${effectiveCount}列を削除`
+              : "列を削除";
+          const addBeforeLabel =
+            effectiveCount > 1
+              ? `前に${effectiveCount}列追加`
+              : "前に列を追加";
+          const addAfterLabel =
+            effectiveCount > 1
+              ? `後に${effectiveCount}列追加`
+              : "後に列を追加";
+          return (
+            <HeaderContextMenu
+              state={headerMenu}
+              onClose={() => setHeaderMenu(null)}
+              columnDeleteLabel={columnDeleteLabel}
+              addBeforeLabel={addBeforeLabel}
+              addAfterLabel={addAfterLabel}
+              onRename={() => {
+                const currentName =
+                  displayData?.headers[menuColumn] ||
+                  `Column ${menuColumn + 1}`;
+                setHeaderEditValue(currentName);
+                setEditingHeaderColumn(menuColumn);
+              }}
+              onInsertColumnBefore={() => {
+                if (inSelection && count > 1) {
+                  insertColumns("before", menuColumn, count);
+                } else {
+                  addColumn("before", menuColumn);
+                }
+              }}
+              onInsertColumnAfter={() => {
+                if (inSelection && count > 1) {
+                  insertColumns("after", menuColumn, count);
+                } else {
+                  addColumn("after", menuColumn);
+                }
+              }}
+              onDeleteColumn={() => {
+                if (inSelection) {
+                  deleteSelectedColumns();
+                } else {
+                  deleteColumn(menuColumn);
+                }
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
