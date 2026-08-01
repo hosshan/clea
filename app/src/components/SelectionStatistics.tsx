@@ -12,21 +12,25 @@ interface StatisticsData {
 }
 
 export const SelectionStatistics: React.FC = () => {
-  const { data, selectedCell, selectedRange } = useCsvStore();
+  const { data, selectedCell, selectedRange, filters, getFilteredData } = useCsvStore();
 
   const statistics = useMemo((): StatisticsData | null => {
     if (!data) return null;
+
+    // 選択範囲の行番号は表示上の位置を指すため、フィルター適用後の行を参照する
+    const viewRows = (getFilteredData() ?? data).rows;
 
     let values: string[] = [];
 
     if (selectedCell) {
       // Single cell selected
-      values = [selectedCell.value];
+      values = [viewRows[selectedCell.row]?.[selectedCell.column] ?? selectedCell.value];
     } else if (selectedRange) {
-      // Range selected
-      for (let row = selectedRange.startRow; row <= selectedRange.endRow; row++) {
+      // Range selected（表示されている行だけを集計対象にする）
+      const endRow = Math.min(selectedRange.endRow, viewRows.length - 1);
+      for (let row = selectedRange.startRow; row <= endRow; row++) {
         for (let col = selectedRange.startColumn; col <= selectedRange.endColumn; col++) {
-          const value = data.rows[row]?.[col] || '';
+          const value = viewRows[row]?.[col] || '';
           values.push(value);
         }
       }
@@ -79,7 +83,8 @@ export const SelectionStatistics: React.FC = () => {
       average,
       hasNumericData: true
     };
-  }, [data, selectedCell, selectedRange]);
+    // filters はフィルター変更時に再計算させるための依存
+  }, [data, selectedCell, selectedRange, filters, getFilteredData]);
 
   const formatNumber = (num: number): string => {
     // Format numbers with appropriate precision

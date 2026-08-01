@@ -27,6 +27,31 @@ export function describeHistoryAction(action: HistoryAction): string {
   }
 }
 
+/**
+ * 表示上の行範囲を、元データ上の行番号リストへ展開する。
+ *
+ * テーブルの選択範囲・メニュー・キーボード操作は「画面に見えている行の位置」を
+ * インデックスとして持つため、データを書き換える前に必ずこの変換を通す。
+ * フィルターで隠れている行は結果に含まれない。
+ *
+ * @param map        表示行 → 元データ行の対応表（フィルター未適用なら null＝恒等変換）
+ * @param totalRows  元データの行数（map が null のときの上限に使う）
+ */
+function toSourceRows(
+  map: number[] | null,
+  startRow: number,
+  endRow: number,
+  totalRows: number
+): number[] {
+  const from = Math.max(0, startRow);
+  const to = Math.min(endRow, (map ? map.length : totalRows) - 1);
+  const rows: number[] = [];
+  for (let r = from; r <= to; r++) {
+    rows.push(map ? map[r] : r);
+  }
+  return rows;
+}
+
 interface CsvState {
   // Data state
   data: CsvData | null;
@@ -119,6 +144,13 @@ interface CsvState {
   removeFilter: (id: string) => void;
   clearFilters: () => void;
   getFilteredData: () => CsvData | null;
+  /**
+   * 表示行 → 元データ行の対応表（表示順）。
+   * フィルター未適用のときは null を返す（＝恒等変換。巨大な配列を作らないため）。
+   */
+  getVisibleRowMap: () => number[] | null;
+  /** 表示上の行番号を元データの行番号へ変換する（非表示・範囲外なら -1） */
+  toSourceRowIndex: (displayRow: number) => number;
 
   addSort: (sort: SortConfig) => void;
   removeSort: (index: number) => void;
@@ -336,15 +368,18 @@ export const useCsvStore = create<CsvState>()(
             ? prev.anchorColumn ?? prev.startColumn
             : columnIndex;
 
+        // フィルター適用中は表示されている行数を基準にする
+        const lastRow = ((get().getFilteredData() ?? state.data).rows.length) - 1;
+
         const selection: CsvSelection = {
           startRow: 0,
           startColumn: Math.min(anchor, columnIndex),
-          endRow: state.data.rows.length - 1,
+          endRow: lastRow,
           endColumn: Math.max(anchor, columnIndex),
           type: 'column',
           anchorRow: 0,
           anchorColumn: anchor,
-          focusRow: state.data.rows.length - 1,
+          focusRow: lastRow,
           focusColumn: columnIndex
         };
         set({ selectedRange: selection, selectedCell: null });
@@ -354,15 +389,18 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // フィルター適用中は表示されている行数を基準にする
+        const lastRow = ((get().getFilteredData() ?? state.data).rows.length) - 1;
+
         const selection: CsvSelection = {
           startRow: 0,
           startColumn: 0,
-          endRow: state.data.rows.length - 1,
+          endRow: lastRow,
           endColumn: state.data.headers.length - 1,
           type: 'range',
           anchorRow: 0,
           anchorColumn: 0,
-          focusRow: state.data.rows.length - 1,
+          focusRow: lastRow,
           focusColumn: state.data.headers.length - 1
         };
 
@@ -436,6 +474,10 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // cell.row は表示上の行番号なので、元データの行番号へ変換する
+        const sourceRow = get().toSourceRowIndex(cell.row);
+        if (sourceRow < 0) return;
+
         // Store before state for history - deep copy rows
         const beforeData = {
           ...state.data,
@@ -443,9 +485,9 @@ export const useCsvStore = create<CsvState>()(
         };
 
         const newRows = [...state.data.rows];
-        if (newRows[cell.row]) {
-          newRows[cell.row] = [...newRows[cell.row]];
-          newRows[cell.row][cell.column] = value;
+        if (newRows[sourceRow]) {
+          newRows[sourceRow] = [...newRows[sourceRow]];
+          newRows[sourceRow][cell.column] = value;
         }
 
         const afterData = {
@@ -507,23 +549,37 @@ export const useCsvStore = create<CsvState>()(
 
       clearFilters: () => set({ filters: [] }),
 
-      getFilteredData: () => {
+      getVisibleRowMap: () => {
         const state = get();
-        if (!state.data || state.filters.length === 0) {
-          return state.data;
-        }
+        if (!state.data || state.filters.length === 0) return null;
 
         const activeFilters = state.filters.filter(f => f.isActive);
-        if (activeFilters.length === 0) {
-          return state.data;
-        }
+        if (activeFilters.length === 0) return null;
 
-        const filteredRows = state.data.rows.filter(row => {
-          return activeFilters.every(filter => {
-            const cellValue = row[filter.column] || '';
-            return applyFilter(cellValue, filter);
-          });
+        const map: number[] = [];
+        state.data.rows.forEach((row, index) => {
+          const visible = activeFilters.every(filter =>
+            applyFilter(row[filter.column] || '', filter)
+          );
+          if (visible) map.push(index);
         });
+        return map;
+      },
+
+      toSourceRowIndex: (displayRow) => {
+        const map = get().getVisibleRowMap();
+        if (!map) return displayRow;
+        return displayRow >= 0 && displayRow < map.length ? map[displayRow] : -1;
+      },
+
+      getFilteredData: () => {
+        const state = get();
+        if (!state.data) return null;
+
+        const map = get().getVisibleRowMap();
+        if (!map) return state.data;
+
+        const filteredRows = map.map(index => state.data!.rows[index]);
 
         return {
           ...state.data,
@@ -617,6 +673,11 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // ドラッグ位置は表示上の行位置なので、元データの行番号へ変換する
+        const sourceFrom = get().toSourceRowIndex(fromIndex);
+        const sourceTo = get().toSourceRowIndex(toIndex);
+        if (sourceFrom < 0 || sourceTo < 0 || sourceFrom === sourceTo) return;
+
         try {
           const { tauriAPI } = await import('../hooks/useTauri');
 
@@ -625,7 +686,7 @@ export const useCsvStore = create<CsvState>()(
             rows: state.data.rows.map(row => [...row])
           };
 
-          const newData = await tauriAPI.moveRow(state.data, fromIndex, toIndex);
+          const newData = await tauriAPI.moveRow(state.data, sourceFrom, sourceTo);
 
           const historyAction: HistoryAction = {
             type: 'replace_all',
@@ -690,17 +751,23 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // 選択範囲の行インデックスは「表示上の位置」を指すため、
+        // フィルター適用中は生データではなく絞り込み後の行を参照する
+        const viewRows = (get().getFilteredData() ?? state.data).rows;
+
         let cellsToClip: string[][] = [];
 
         if (state.selectedCell) {
           // Copy single cell
-          cellsToClip = [[state.selectedCell.value]];
+          const { row, column, value } = state.selectedCell;
+          cellsToClip = [[viewRows[row]?.[column] ?? value]];
         } else if (state.selectedRange) {
-          // Copy range selection
-          for (let row = state.selectedRange.startRow; row <= state.selectedRange.endRow; row++) {
+          // Copy range selection（表示行数を超える範囲は切り詰める）
+          const endRow = Math.min(state.selectedRange.endRow, viewRows.length - 1);
+          for (let row = state.selectedRange.startRow; row <= endRow; row++) {
             const rowData: string[] = [];
             for (let col = state.selectedRange.startColumn; col <= state.selectedRange.endColumn; col++) {
-              rowData.push(state.data.rows[row]?.[col] || '');
+              rowData.push(viewRows[row]?.[col] || '');
             }
             cellsToClip.push(rowData);
           }
@@ -776,9 +843,22 @@ export const useCsvStore = create<CsvState>()(
           return r;
         });
 
+        // 貼り付け先は表示上の行位置なので、元データの行番号へ変換する。
+        // 表示されている行を下に辿り、末尾を超えた分は新しい行として追加する。
+        const rowMap = get().getVisibleRowMap();
+        const visibleCount = rowMap ? rowMap.length : state.data.rows.length;
+
         // Paste clipboard data starting from target cell
         for (let clipRow = 0; clipRow < state.clipboard.length; clipRow++) {
-          const targetRowIndex = startRow + clipRow;
+          const displayRowIndex = startRow + clipRow;
+          let targetRowIndex: number;
+
+          if (displayRowIndex < visibleCount) {
+            targetRowIndex = rowMap ? rowMap[displayRowIndex] : displayRowIndex;
+          } else {
+            // 表示行の末尾を超える貼り付けは末尾に行を追加していく
+            targetRowIndex = newRows.length;
+          }
 
           // Extend rows if necessary
           while (targetRowIndex >= newRows.length) {
@@ -831,15 +911,28 @@ export const useCsvStore = create<CsvState>()(
         const newRows = [...state.data.rows];
         const selection = state.selectedCell || state.selectedRange || undefined;
 
+        // 選択範囲は表示上の行位置なので、元データの行番号へ変換する
+        // （フィルターで隠れている行は削除対象に含めない）
+        const rowMap = get().getVisibleRowMap();
+
         if (state.selectedCell) {
           // Delete single cell
-          if (newRows[state.selectedCell.row]) {
-            newRows[state.selectedCell.row] = [...newRows[state.selectedCell.row]];
-            newRows[state.selectedCell.row][state.selectedCell.column] = '';
+          const sourceRow = rowMap
+            ? rowMap[state.selectedCell.row] ?? -1
+            : state.selectedCell.row;
+          if (sourceRow >= 0 && newRows[sourceRow]) {
+            newRows[sourceRow] = [...newRows[sourceRow]];
+            newRows[sourceRow][state.selectedCell.column] = '';
           }
         } else if (state.selectedRange) {
           // Delete range selection
-          for (let row = state.selectedRange.startRow; row <= state.selectedRange.endRow; row++) {
+          const sourceRows = toSourceRows(
+            rowMap,
+            state.selectedRange.startRow,
+            state.selectedRange.endRow,
+            state.data.rows.length
+          );
+          for (const row of sourceRows) {
             if (newRows[row]) {
               newRows[row] = [...newRows[row]];
               for (let col = state.selectedRange.startColumn; col <= state.selectedRange.endColumn; col++) {
@@ -885,16 +978,27 @@ export const useCsvStore = create<CsvState>()(
         };
         const newRows = state.data.rows.map(row => [...row]);
 
+        // 選択範囲は表示上の行位置。フィルターで隠れている行は飛ばして、
+        // 「画面に見えている並び」でフィルする
+        const rowMap = get().getVisibleRowMap();
+
         if (sel && sel.endRow > sel.startRow) {
+          const sourceRows = toSourceRows(rowMap, sel.startRow, sel.endRow, state.data.rows.length);
+          if (sourceRows.length < 2) return;
+          const [srcRow, ...targetRows] = sourceRows;
           for (let c = sel.startColumn; c <= sel.endColumn; c++) {
-            const srcVal = newRows[sel.startRow]?.[c] ?? '';
-            for (let r = sel.startRow + 1; r <= sel.endRow; r++) {
+            const srcVal = newRows[srcRow]?.[c] ?? '';
+            for (const r of targetRows) {
               if (newRows[r]) newRows[r][c] = srcVal;
             }
           }
         } else if (state.selectedCell && state.selectedCell.row > 0) {
           const { row, column } = state.selectedCell;
-          newRows[row][column] = newRows[row - 1]?.[column] ?? '';
+          // 直上「表示行」の値をコピーする
+          const targetRow = rowMap ? rowMap[row] ?? -1 : row;
+          const aboveRow = rowMap ? rowMap[row - 1] ?? -1 : row - 1;
+          if (targetRow < 0 || aboveRow < 0 || !newRows[targetRow]) return;
+          newRows[targetRow][column] = newRows[aboveRow]?.[column] ?? '';
         } else {
           return; // フィル対象なし
         }
@@ -954,20 +1058,25 @@ export const useCsvStore = create<CsvState>()(
           return Array.from({ length: count }, (_, k) => srcValues[k % srcValues.length]);
         };
 
+        // origin / target は表示上の行位置。フィルターで隠れている行は対象外にする
+        const rowMap = get().getVisibleRowMap();
+        const totalRows = state.data.rows.length;
+        const originRows = toSourceRows(rowMap, origin.r1, origin.r2, totalRows);
+        if (originRows.length === 0) return;
+
         if (grewDown) {
-          const count = target.endRow - origin.r2;
+          const targetRows = toSourceRows(rowMap, origin.r2 + 1, target.endRow, totalRows);
+          if (targetRows.length === 0) return;
           for (let c = origin.c1; c <= origin.c2; c++) {
-            const src: string[] = [];
-            for (let r = origin.r1; r <= origin.r2; r++) src.push(newRows[r]?.[c] ?? '');
-            const filled = extrapolate(src, count);
-            for (let k = 0; k < count; k++) {
-              const r = origin.r2 + 1 + k;
+            const src = originRows.map(r => newRows[r]?.[c] ?? '');
+            const filled = extrapolate(src, targetRows.length);
+            targetRows.forEach((r, k) => {
               if (newRows[r]) newRows[r][c] = filled[k];
-            }
+            });
           }
         } else if (grewRight) {
           const count = target.endColumn - origin.c2;
-          for (let r = origin.r1; r <= origin.r2; r++) {
+          for (const r of originRows) {
             if (!newRows[r]) continue;
             const src: string[] = [];
             for (let c = origin.c1; c <= origin.c2; c++) src.push(newRows[r][c] ?? '');
@@ -1092,17 +1201,21 @@ export const useCsvStore = create<CsvState>()(
         const newRows = [...state.data.rows];
         const newRow = new Array(state.data.headers.length).fill('');
 
+        // rowIndex は表示上の行位置なので、元データの行番号へ変換する
+        const sourceIndex =
+          rowIndex === undefined ? -1 : get().toSourceRowIndex(rowIndex);
+
         // Handle empty table case
         let insertIndex: number;
         if (state.data.rows.length === 0) {
           // If table is empty, always insert at index 0
           insertIndex = 0;
-        } else if (rowIndex === undefined) {
-          // If rowIndex is not provided, append to the end
+        } else if (sourceIndex < 0) {
+          // rowIndex 未指定、または表示範囲外なら末尾に追加
           insertIndex = state.data.rows.length;
         } else {
           // Normal case: insert above or below the specified row
-          insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
+          insertIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
         }
         newRows.splice(insertIndex, 0, newRow);
 
@@ -1143,11 +1256,16 @@ export const useCsvStore = create<CsvState>()(
           new Array(state.data!.headers.length).fill('')
         );
 
+        // rowIndex は表示上の行位置なので、元データの行番号へ変換する
+        const sourceIndex = get().toSourceRowIndex(rowIndex);
+
         let insertIndex: number;
         if (state.data.rows.length === 0) {
           insertIndex = 0;
+        } else if (sourceIndex < 0) {
+          insertIndex = state.data.rows.length;
         } else {
-          insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
+          insertIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
         }
         newRows.splice(insertIndex, 0, ...newBlankRows);
 
@@ -1171,12 +1289,16 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // rowIndex は表示上の行位置なので、元データの行番号へ変換する
+        const sourceIndex = get().toSourceRowIndex(rowIndex);
+        if (sourceIndex < 0) return;
+
         const beforeData = {
           ...state.data,
           rows: state.data.rows.map(row => [...row])
         };
         const newRows = [...state.data.rows];
-        newRows.splice(rowIndex, 1);
+        newRows.splice(sourceIndex, 1);
 
         const afterData = {
           ...state.data,
@@ -1211,8 +1333,15 @@ export const useCsvStore = create<CsvState>()(
           rows: state.data.rows.map(row => [...row])
         };
 
+        // rowIndices は表示上の行位置なので、元データの行番号へ変換する
+        const rowMap = get().getVisibleRowMap();
+        const sourceIndices = rowMap
+          ? rowIndices.map(i => (i >= 0 && i < rowMap.length ? rowMap[i] : -1)).filter(i => i >= 0)
+          : rowIndices;
+        if (sourceIndices.length === 0) return;
+
         // 重複排除 & 降順ソートしてから splice することで index ズレを防ぐ
-        const sorted = [...new Set(rowIndices)].sort((a, b) => b - a);
+        const sorted = [...new Set(sourceIndices)].sort((a, b) => b - a);
         const newRows = [...state.data.rows];
         sorted.forEach(i => {
           if (i >= 0 && i < newRows.length) newRows.splice(i, 1);
@@ -1250,15 +1379,19 @@ export const useCsvStore = create<CsvState>()(
 
       duplicateRow: (rowIndex) => {
         const state = get();
-        if (!state.data || !state.data.rows[rowIndex]) return;
+        if (!state.data) return;
+
+        // rowIndex は表示上の行位置なので、元データの行番号へ変換する
+        const sourceIndex = get().toSourceRowIndex(rowIndex);
+        if (sourceIndex < 0 || !state.data.rows[sourceIndex]) return;
 
         const beforeData = {
           ...state.data,
           rows: state.data.rows.map(row => [...row])
         };
         const newRows = [...state.data.rows];
-        const duplicatedRow = [...state.data.rows[rowIndex]];
-        newRows.splice(rowIndex + 1, 0, duplicatedRow);
+        const duplicatedRow = [...state.data.rows[sourceIndex]];
+        newRows.splice(sourceIndex + 1, 0, duplicatedRow);
 
         const afterData = {
           ...state.data,
@@ -1595,8 +1728,12 @@ export const useCsvStore = create<CsvState>()(
           }
         }
 
-        // Search through all rows and columns
-        data.rows.forEach((row, rowIndex) => {
+        // フィルター適用中は表示されている行だけを検索対象にする。
+        // ここで得られる rowIndex は表示上の行位置（＝選択やスクロールと同じ座標系）。
+        const viewRows = (get().getFilteredData() ?? data).rows;
+
+        // Search through all visible rows and columns
+        viewRows.forEach((row, rowIndex) => {
           const columnsToSearch = columnIndex !== undefined ? [columnIndex] : row.map((_, idx) => idx);
 
           columnsToSearch.forEach((colIdx) => {
@@ -1682,7 +1819,11 @@ export const useCsvStore = create<CsvState>()(
         if (!data || searchResults.length === 0 || currentSearchIndex < 0) return;
 
         const currentResult = searchResults[currentSearchIndex];
-        const { row, column, value } = currentResult;
+        const { column, value } = currentResult;
+
+        // 検索結果の row は表示上の行位置なので、元データの行番号へ変換する
+        const row = get().toSourceRowIndex(currentResult.row);
+        if (row < 0 || !data.rows[row]) return;
 
         // Save state for undo
         const beforeData = JSON.parse(JSON.stringify(data));
@@ -1759,8 +1900,15 @@ export const useCsvStore = create<CsvState>()(
 
         const { caseSensitive, wholeWord, regex } = searchOptions;
 
+        // 検索結果の row は表示上の行位置なので、元データの行番号へ変換する
+        const rowMap = get().getVisibleRowMap();
+
         searchResults.forEach(result => {
-          const { row, column, value } = result;
+          const { column, value } = result;
+          const row = rowMap
+            ? (result.row >= 0 && result.row < rowMap.length ? rowMap[result.row] : -1)
+            : result.row;
+          if (row < 0 || !newData.rows[row]) return;
           let newValue = value;
 
           if (regex) {
