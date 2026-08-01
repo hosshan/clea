@@ -98,6 +98,9 @@ export function CsvTable() {
 
   // Use filtered data for display
   const displayData = getFilteredData() || data;
+  // 選択・編集・ナビゲーションが扱う行番号は「表示上の位置」なので、
+  // セルの値や行数の参照は必ずフィルター適用後のこちらを使う
+  const displayRows = displayData?.rows ?? [];
 
   // Drag and drop functionality
   const { dragState, handlers } = useDragAndDrop({
@@ -181,7 +184,7 @@ export function CsvTable() {
         pendingInitialEdit.current = null;
       } else {
         const cellValue =
-          data.rows[editingCell.row]?.[editingCell.column] || "";
+          displayRows[editingCell.row]?.[editingCell.column] || "";
         setEditValue(cellValue);
       }
     }
@@ -403,7 +406,7 @@ export function CsvTable() {
             // Cell is not rendered yet, use virtualizer to scroll
             if (
               targetRow >= 0 &&
-              targetRow < (data?.rows.length || 0)
+              targetRow < displayRows.length
             ) {
               rowVirtualizer.scrollToIndex(targetRow, {
                 align: "center",
@@ -432,7 +435,7 @@ export function CsvTable() {
   ) => {
     if (!data) return;
 
-    const cell = { row, column, value: data.rows[row]?.[column] || "" };
+    const cell = { row, column, value: displayRows[row]?.[column] || "" };
 
     // Handle shift+click for range selection
     if (event?.shiftKey) {
@@ -551,7 +554,7 @@ export function CsvTable() {
   const handleCellDoubleClick = (row: number, column: number) => {
     if (!data) return;
 
-    const cell = { row, column, value: data.rows[row]?.[column] || "" };
+    const cell = { row, column, value: displayRows[row]?.[column] || "" };
     startEditing(cell);
   };
 
@@ -580,7 +583,7 @@ export function CsvTable() {
     event.preventDefault();
     // 右クリックしたセルが選択外なら、そのセルを単独選択（Excel挙動）
     if (!isCellInSelection(row, column)) {
-      selectCell({ row, column, value: data.rows[row]?.[column] || "" });
+      selectCell({ row, column, value: displayRows[row]?.[column] || "" });
     }
     setCellMenu({ x: event.clientX, y: event.clientY, row, column });
   };
@@ -696,15 +699,15 @@ export function CsvTable() {
               const targetRowIndex =
                 selectedCell !== null
                   ? selectedCell.row
-                  : data.rows.length > 0
-                  ? data.rows.length - 1
+                  : displayRows.length > 0
+                  ? displayRows.length - 1
                   : undefined;
 
               // Calculate the new row index before adding
               // For 'below' position: newRowIndex = targetRowIndex + 1
-              // For undefined (end): newRowIndex = data.rows.length
+              // For undefined (end): newRowIndex = displayRows.length
               const newRowIndex =
-                selectedCell !== null ? selectedCell.row + 1 : data.rows.length;
+                selectedCell !== null ? selectedCell.row + 1 : displayRows.length;
 
               addRow("below", targetRowIndex);
 
@@ -762,7 +765,7 @@ export function CsvTable() {
       const cell = {
         row: editRow,
         column: editColumn,
-        value: data.rows[editRow]?.[editColumn] || "",
+        value: displayRows[editRow]?.[editColumn] || "",
       };
       e.preventDefault();
       pendingInitialEdit.current = e.key;
@@ -782,16 +785,16 @@ export function CsvTable() {
           extendToCell = {
             row: Math.max(0, row - 1),
             column,
-            value: data.rows[Math.max(0, row - 1)]?.[column] || "",
+            value: displayRows[Math.max(0, row - 1)]?.[column] || "",
           };
           break;
         case "ArrowDown":
           e.preventDefault();
           extendToCell = {
-            row: Math.min(data.rows.length - 1, row + 1),
+            row: Math.min(displayRows.length - 1, row + 1),
             column,
             value:
-              data.rows[Math.min(data.rows.length - 1, row + 1)]?.[column] ||
+              displayRows[Math.min(displayRows.length - 1, row + 1)]?.[column] ||
               "",
           };
           break;
@@ -800,7 +803,7 @@ export function CsvTable() {
           extendToCell = {
             row,
             column: Math.max(0, column - 1),
-            value: data.rows[row]?.[Math.max(0, column - 1)] || "",
+            value: displayRows[row]?.[Math.max(0, column - 1)] || "",
           };
           break;
         case "ArrowRight":
@@ -809,7 +812,7 @@ export function CsvTable() {
             row,
             column: Math.min(data.headers.length - 1, column + 1),
             value:
-              data.rows[row]?.[Math.min(data.headers.length - 1, column + 1)] ||
+              displayRows[row]?.[Math.min(data.headers.length - 1, column + 1)] ||
               "",
           };
           break;
@@ -822,7 +825,7 @@ export function CsvTable() {
           // Scroll row into view
           if (
             extendToCell.row >= 0 &&
-            extendToCell.row < (data?.rows.length || 0)
+            extendToCell.row < displayRows.length
           ) {
             const virtualItems = rowVirtualizer.getVirtualItems();
             const virtualItem = virtualItems.find(
@@ -902,7 +905,7 @@ export function CsvTable() {
           break;
         case "ArrowDown":
           e.preventDefault();
-          newRow = data.rows.length - 1; // Jump to last row
+          newRow = displayRows.length - 1; // Jump to last row
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -921,7 +924,7 @@ export function CsvTable() {
         case "End":
           // Cmd/Ctrl + End: 最終セルへ
           e.preventDefault();
-          newRow = data.rows.length - 1;
+          newRow = displayRows.length - 1;
           newColumn = data.headers.length - 1;
           break;
         default:
@@ -937,7 +940,7 @@ export function CsvTable() {
           break;
         case "ArrowDown":
           e.preventDefault();
-          newRow = Math.min(data.rows.length - 1, row + 1);
+          newRow = Math.min(displayRows.length - 1, row + 1);
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -963,7 +966,7 @@ export function CsvTable() {
           break;
         case "PageDown":
           e.preventDefault();
-          newRow = Math.min(data.rows.length - 1, row + getPageSize());
+          newRow = Math.min(displayRows.length - 1, row + getPageSize());
           break;
         case "Enter":
         case "F2":
@@ -984,7 +987,7 @@ export function CsvTable() {
       const newCell = {
         row: newRow,
         column: newColumn,
-        value: data.rows[newRow]?.[newColumn] || "",
+        value: displayRows[newRow]?.[newColumn] || "",
       };
       selectCell(newCell);
 
@@ -999,11 +1002,11 @@ export function CsvTable() {
       if (editingCell) {
         updateCell(editingCell, editValue);
         // Move to next row after saving
-        if (data && editingCell.row < data.rows.length - 1) {
+        if (data && editingCell.row < displayRows.length - 1) {
           const nextCell = {
             row: editingCell.row + 1,
             column: editingCell.column,
-            value: data.rows[editingCell.row + 1]?.[editingCell.column] || "",
+            value: displayRows[editingCell.row + 1]?.[editingCell.column] || "",
           };
           selectCell(nextCell);
         }
@@ -1021,7 +1024,7 @@ export function CsvTable() {
           const nextCell = {
             row: editingCell.row,
             column: editingCell.column + 1,
-            value: data.rows[editingCell.row]?.[editingCell.column + 1] || "",
+            value: displayRows[editingCell.row]?.[editingCell.column + 1] || "",
           };
           selectCell(nextCell);
         }
