@@ -336,15 +336,18 @@ export const useCsvStore = create<CsvState>()(
             ? prev.anchorColumn ?? prev.startColumn
             : columnIndex;
 
+        // フィルター適用中は表示されている行数を基準にする
+        const lastRow = ((get().getFilteredData() ?? state.data).rows.length) - 1;
+
         const selection: CsvSelection = {
           startRow: 0,
           startColumn: Math.min(anchor, columnIndex),
-          endRow: state.data.rows.length - 1,
+          endRow: lastRow,
           endColumn: Math.max(anchor, columnIndex),
           type: 'column',
           anchorRow: 0,
           anchorColumn: anchor,
-          focusRow: state.data.rows.length - 1,
+          focusRow: lastRow,
           focusColumn: columnIndex
         };
         set({ selectedRange: selection, selectedCell: null });
@@ -354,15 +357,18 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // フィルター適用中は表示されている行数を基準にする
+        const lastRow = ((get().getFilteredData() ?? state.data).rows.length) - 1;
+
         const selection: CsvSelection = {
           startRow: 0,
           startColumn: 0,
-          endRow: state.data.rows.length - 1,
+          endRow: lastRow,
           endColumn: state.data.headers.length - 1,
           type: 'range',
           anchorRow: 0,
           anchorColumn: 0,
-          focusRow: state.data.rows.length - 1,
+          focusRow: lastRow,
           focusColumn: state.data.headers.length - 1
         };
 
@@ -690,17 +696,23 @@ export const useCsvStore = create<CsvState>()(
         const state = get();
         if (!state.data) return;
 
+        // 選択範囲の行インデックスは「表示上の位置」を指すため、
+        // フィルター適用中は生データではなく絞り込み後の行を参照する
+        const viewRows = (get().getFilteredData() ?? state.data).rows;
+
         let cellsToClip: string[][] = [];
 
         if (state.selectedCell) {
           // Copy single cell
-          cellsToClip = [[state.selectedCell.value]];
+          const { row, column, value } = state.selectedCell;
+          cellsToClip = [[viewRows[row]?.[column] ?? value]];
         } else if (state.selectedRange) {
-          // Copy range selection
-          for (let row = state.selectedRange.startRow; row <= state.selectedRange.endRow; row++) {
+          // Copy range selection（表示行数を超える範囲は切り詰める）
+          const endRow = Math.min(state.selectedRange.endRow, viewRows.length - 1);
+          for (let row = state.selectedRange.startRow; row <= endRow; row++) {
             const rowData: string[] = [];
             for (let col = state.selectedRange.startColumn; col <= state.selectedRange.endColumn; col++) {
-              rowData.push(state.data.rows[row]?.[col] || '');
+              rowData.push(viewRows[row]?.[col] || '');
             }
             cellsToClip.push(rowData);
           }
